@@ -34,3 +34,7 @@ You should provide feedback on the progress of your model – by adding suitable
 
 ### Schedule
 Time is an essential aspect of the model, and you should run each simulation for the same amount of ticks.
+
+## Contact me!
+
+For more information about this project, please email me at mgrosmaninho@hotmail.com
