@@ -21,6 +21,7 @@ turtles-own [
   ammo amount                                                                        ; this creates 2 variables called ammo and amount
   per_vision_radius per_vision_angle                                                 ; this creates variables for personalised vision cones
   vision_cone_random                                                                 ; this creates a variable to store a stable vision cone random value
+  cooperation-level                                                                  ; this creates a variable for the level of cooperation (random value from 1-5) subject to change
 ]
 
 to setup                                                                             ; this creates a function called setup
@@ -49,6 +50,7 @@ to go                                                                           
   tick                                                                               ; this adds 1 to the tick counter
   spawn-more-resources                                                               ; this calls the spawn-more-resources function
   check-winner                                                                       ; this calls the check-winner function
+  cooperation-partner
 end
 
 
@@ -64,7 +66,8 @@ to make-humans
     setxy random-xcor random-ycor                                                    ; this sets the starting position of the humans to a random location in the world
     set age random 81                                                                ; this sets the age of the human to a random allocation up to 81
     set size ((0.6 * (age * 0.01)) + 0.4) * 12                                       ; this sets the size depending on the age
-    set health 50 + (0.5 * ((-0.04 * ((age - 50)*(age - 50)) + 100))) - random 10    ; this sets the health of the human to 50 + a random allocation depending on the age
+    set health 50 + (0.5 * ((-0.04 * ((age - 50)*(age - 50)) + 100))) - random 10     ; this sets the health of the human to 50 + a random allocation depending on the age
+    set cooperation-level 1 + random 5                                               ; value between 0 to 5
   ]
 end
 
@@ -191,6 +194,19 @@ to-report human-function                                                        
 
   report seen                                                                        ; return true or false based in local variable seen
 end
+
+to cooperation-partner
+  ask turtles [
+    let partner one-of other turtles in-radius 2
+    if partner != nobody [
+      if (cooperation-level + [cooperation-level] of partner) / 2 > 0.5 [             ;; if they cooperate, they both turn green
+        set color green
+        ask partner [ set color green ]
+      ]
+    ]
+  ]
+end
+
 
 
 ;;;;;;;;;;;;
@@ -1267,7 +1283,7 @@ false
 Polygon -7500403 true true 270 75 225 30 30 225 75 270
 Polygon -7500403 true true 30 75 75 30 270 225 225 270
 @#$#@#$#@
-NetLogo 6.1.1
+NetLogo 6.4.0
 @#$#@#$#@
 @#$#@#$#@
 @#$#@#$#@
