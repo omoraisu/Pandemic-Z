@@ -23,6 +23,14 @@ turtles-own [
   vision_cone_random                                                                 ; this creates a variable to store a stable vision cone random value
 ]
 
+zombies-own [ 
+  target-human 
+  is-in-horde?
+  base-speed
+  lifespan
+]
+
+
 to setup                                                                             ; this creates a function called setup
   clear-all                                                                          ; this clears the world of any previous activities
   reset-ticks                                                                        ; this resets the ticks counter
@@ -270,16 +278,43 @@ to make-zombies
     set size 8                                                                       ; this sets the size of the zombies to 8
     set color red                                                                    ; this sets the color of the zombies to red
     setxy random-xcor 30 + random 150                                                ; this sets the starting position of the zombies to x = 30 + 150 to a random location in the world
+    set is-in-horde? false
+    set target-human nobody           
+    set base-speed zombies_speed                                                     ;; base speed
+    set age 0
+    set lifespan random 900 + 1095  ; 1095 to 1825 ticks (3 to 5 years)
   ]
 end
 
 to make-zombies-move                                                                 ; this creates a function called make-zombies-move
-  ask zombies [                                                                      ; this asks all of the zombies in the population to do what is in the brackets
-    set color red                                                                    ; this sets the color of each zombie to red
+  ask zombies [  
+                                                                   ; this sets the color of each zombie to red
     zombie-show-visualisations                                                       ; call the zombie-show-visualisations function
     convert-humans                                                                   ; this calls the convert-humans function
     convert-rambos                                                                   ; this calls the convert-rambos function
     detect-wall                                                                      ; this calls the detect-wall function
+    horde-behavior
+    
+    let time-left lifespan - age
+    
+    let speed-factor 1  ;; default fallback
+    if lifespan > 0 [
+      set speed-factor time-left / lifespan
+      if speed-factor < 0.2 [ set speed-factor 0.2 ]
+    ]
+   
+    set zombies_speed base-speed * speed-factor
+    
+    set age age + 1
+    
+    ifelse age >= lifespan [
+      set color gray
+      set zombies_speed 0
+      die
+    ][
+      set color red
+    ]
+
     fd zombies_speed                                                                 ; this sets the speed at which the zombie move
   ]
 end
@@ -306,6 +341,7 @@ to convert-humans                                                               
   let seen [false]                                                                   ; this creates a local variable called seen and sets it to false
   let bit [false]                                                                    ; this creates a local variable called bit and sets it to false
   let human_bit 0                                                                    ; this creates a local variable calles human_bit and sets it to 0
+  set is-in-horde? false
 
   ask humans in-cone zombies_vision_radius zombies_vision_angle [                    ; this sets up a vision cone with the parameters from zombies_vision_radius zombies_vision_angle to detects human
     set color green                                                                  ; this sets the color of the human detected within the vision code of the zombie to green
@@ -327,6 +363,8 @@ to convert-humans                                                               
       set death_by_zombie death_by_zombie + 1                                        ; this increments the cause of death by zoombie by one in order for plotting
       set breed zombies                                                              ; this sets the breed of the dead human to a zombie
       set shape "person"                                                             ; this sets the shape of the dead human to a person
+      set is-in-horde? false
+      set target-human nobody
     ]
     set color green                                                                  ; set color of zombie to green
   ]
@@ -336,6 +374,7 @@ to convert-rambos                                                               
   let seen [false]                                                                   ; this creates a local variable called seen and sets it to false
   let bit [false]                                                                    ; this creates a local variable called bit and sets it to false
   let rambo_bit 0                                                                    ; this creates a local variable calles rambo_bit and sets it to 0
+  set is-in-horde? false
 
   ask rambo in-cone zombies_vision_radius zombies_vision_angle [                     ; this sets up a vision cone with the parameters from zombies_vision_radius zombies_vision_angle to detects rambo
     set color green                                                                  ; this sets the color of the rambo detected within the vision code of the zombie to green
@@ -357,10 +396,63 @@ to convert-rambos                                                               
       set death_by_zombie death_by_zombie + 1                                        ; this increments the cause of death by zoombie by one in order for plotting
       set breed zombies                                                              ; this sets the breed of the dead rambo to a zombie
       set shape "person"                                                             ; this sets the shape of the dead rambo to a person
+      set is-in-horde? false
+      set target-human nobody
     ]
     set color green                                                                  ; set color of zombie to green
   ]
 end
+
+to horde-behavior
+  ask zombies [
+    if (not is-in-horde?) [  ;; If the zombie is not already in a horde
+      ;; Check if a nearby zombie is chasing a human
+      let nearby-zombie one-of zombies in-radius zombies_vision_radius with [target-human != nobody]
+      if nearby-zombie != nobody [  ;; If we find a zombie chasing a human
+        ;; Join the horde and follow the same human
+        set is-in-horde? true
+        set target-human [target-human] of nearby-zombie  ;; Follow the same target human as the other zombie
+      ]
+    ]
+    
+    ;; If the zombie is in the horde, follow the group
+    if is-in-horde? [
+      follow-horde
+    ]
+  ]
+end
+
+to follow-horde
+  let victim target-human  ;; The target human the zombie is chasing
+  
+  if victim = 0 or victim = nobody[
+    set is-in-horde? false
+    make-zombies-move
+  ]
+
+  if victim != nobody [
+    face victim
+    fd zombies_speed
+    
+    ;; If the human dies, stop the horde behavior
+    if count victim = 0 [
+      stop-horde
+    ]
+    
+    ;; If the human escapes the horde's vision, stop the horde behavior
+    if distance victim > zombies_vision_radius [
+      stop-horde
+    ]
+  ]
+end
+
+to stop-horde
+  ask zombies with [is-in-horde?] [
+    set is-in-horde? false  ;; Stop following the horde
+    set target-human nobody  ;; No longer chasing any human
+  ]
+end
+
 
 
 ;;;;;;;;;;;;;;;;;
@@ -462,6 +554,7 @@ to check-winner                                                                 
     user-message (word "The humans have won!!! With "(count humans + count rambo) "humans left.") ; output the message
   ]
 end
+
 @#$#@#$#@
 GRAPHICS-WINDOW
 385
