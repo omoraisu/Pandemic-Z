@@ -1,16 +1,14 @@
 ; Pandemic Z: Optimizing Group Size for Survival in a Resource-Limited Zombie Outbreak
-; NetLogo Agent-Based Model
 
-; Define our agent types
+; ----- BREEDS -----
 breed [humans human]
 breed [zombies zombie]
 breed [resources resource]  ; Food, water, supplies as physical entities
 
+; ----- GLOBAL VARIABLES -----
 globals [
   day                ; tracks day count for survival metrics
   day-phase          ; 0 = day, 1 = night
-  avg-group-size     ; for tracking metrics
-  num-groups         ; number of distinct groups
   total-survivors    ; count of remaining humans
   total-deaths       ; count of humans who died
   total-infections   ; count of humans who became zombies
@@ -18,6 +16,7 @@ globals [
   resource-scarcity  ; global metric of resource availability (0-100)
 ]
 
+; ----- AGENT PROPERTIES -----
 humans-own [
   energy             ; 0-100, decreases over time, needs food/rest
   speed              ; depends on energy level (0.1-1)
@@ -36,6 +35,7 @@ humans-own [
 ]
 
 zombies-own [
+  health             ; 0-100
   speed              ; typically slower than humans
   strength           ; determines damage to humans
   state              ; "wandering", "chasing", "feeding"
@@ -53,13 +53,13 @@ patches-own [
   last-visited       ; when patch was last visited by any agent
 ]
 
-; Setup procedure to initialize the model
+; ----- SETUP PROCEDURES -----
 to setup
   clear-all
   setup-environment
   setup-humans
   setup-zombies
-  ;setup-resources
+  setup-resources
   reset-ticks
 end
 
@@ -95,7 +95,7 @@ end
 to setup-humans
   create-humans initial-human-population [
     set shape "person"
-    set color blue
+    set color green
     set size 1.5
     move-to one-of patches with [not any? humans-here]
 
@@ -120,10 +120,7 @@ to setup-humans
     set infection-timer 0
   ]
 
-
-
   set total-survivors count humans
-  set num-groups max-initial-groups
 end
 
 ; Setup initial zombie population
@@ -135,7 +132,8 @@ to setup-zombies
     move-to one-of patches with [not any? turtles-here]
 
     ; Initialize zombie properties
-    set speed 0.3 + random-float 0.3  ; Zombies are slower than humans
+    set health 75 + random 25          ; Initial health of zombie
+    set speed 0.3 + random-float 0.3   ; Zombies are slower than humans
     set strength 8 + random 4          ; But stronger
     set state "wandering"
     set vision-range 3 + random 2      ; Poor vision
@@ -153,6 +151,159 @@ to setup-resources
     set size 1
     move-to one-of patches with [not any? turtles-here]
   ]
+end
+
+; ----- MAIN PROCEDURES -----
+to go
+  ; Update time and environment
+  ; update-time
+  ; update-resources
+
+  ; Update agents
+  ask humans [human-behavior]
+  ; ask zombies [zombie-behavior]
+  ; ask corpses [update-corpse]
+
+  ; Update global statistics
+  ; update-stats
+
+  tick
+end
+
+; ----- HUMAN BEHAVIOR PROCEDURES -----
+to human-behavior
+  ; Skip if dead
+  if state = "corpse" [update-corpse-state stop]
+
+  ; Basic metabolism
+  set energy energy - 0.1
+  set hunger-level hunger-level + 0.2
+
+  ; Update speed based on energy
+  set speed 0.1 + (energy / 100) * 0.9 ;Speed ranges from 0.1 to 1.0 based on energy
+
+  ; Death check (from hunger or no energy)
+  if energy <= 0 or hunger-level >= 100 [
+    set state "corpse"
+    set color gray
+    stop
+  ]
+
+  ; Handle infection progression
+  ; if state = "infected" [
+  ;  handle-infection
+  ;  stop
+  ; ]
+
+  ; State-based behavior
+  (ifelse
+    state = "wandering" [wander-behavior]
+    state = "running" [run-behavior]
+    ; state = "hiding" [hide-behavior]
+    state = "fighting" [fight-behavior]
+  )
+
+  ; Consume resources if hungry
+  ; if hunger-level > 70 and resource-inventory > 0 [
+  ;  eat-food
+  ; ]
+end
+
+; ----- STATE-SPECIFIC BEHAVIORS -----
+
+; Wandering state - looking for resources or shelter
+to wander-behavior
+  set color pink
+  ; First priority: Check for nearby zombies
+  let visible-zombies zombies in-radius vision-range
+  if any? visible-zombies [
+    ; Zombies detected! Either run or fight
+    ifelse strength > 7 and count visible-zombies = 1 and skill-combat > 50 [
+      set state "fighting"
+      face min-one-of visible-zombies [distance myself]
+    ][
+      set state "running"
+      set stress-level stress-level + 10
+    ]
+    stop
+  ]
+
+end
+
+; Running state - fleeing from zombies
+to run-behavior
+  set color yellow
+  ; Find zombies in visual range
+  let visible-zombies zombies in-radius vision-range
+
+  ifelse any? visible-zombies [
+    ; Run away from nearest zombie
+    let nearest-zombie min-one-of visible-zombies [distance myself]
+    if nearest-zombie != nobody [
+      face nearest-zombie
+      rt 180  ; Turn around
+      fd speed * 1.2  ; Run faster than normal
+
+      ; Running consumes more energy
+      set energy energy - 0.3
+      set stress-level min (list (stress-level + 1) 100)
+
+      ; Look for hiding spots
+      if any? patches in-radius 2 with [pcolor = black or pcolor = gray] [
+        move-to one-of patches in-radius 2 with [pcolor = black or pcolor = gray]
+        set state "hiding"
+        set stress-level min (list (stress-level + 5) 100)
+      ]
+    ]
+  ][
+    ; No zombies visible anymore, return to wandering
+    set state "wandering"
+    set stress-level max (list (stress-level - 5) 0)  ; Reduce stress slightly
+  ]
+end
+
+; Fighting state - combat with zombies
+to fight-behavior
+  set color white
+  ; Find zombies in attack range
+  let zombies-to-fight zombies in-radius 1.5
+
+  ifelse any? zombies-to-fight [
+    ; Target the closest zombie
+    let target min-one-of zombies-to-fight [distance myself]
+
+    ; Calculate attack strength based on attributes
+    let attack-power strength + (skill-combat / 20) + random 3
+
+    ; Perform attack
+    ask target [
+      ; Zombie takes damage
+      set health health - attack-power
+      if health <= 0 [die]
+    ]
+
+    ; Fighting consumes energy
+    set energy energy - 1
+    set stress-level min (list (stress-level + 2) 100)
+
+    ; Improve combat skill
+    set skill-combat min (list (skill-combat + 0.5) 100)
+
+    ; Check if we should continue fighting
+    if energy < 20 or count zombies-to-fight > 1 [
+      set state "running"
+    ]
+  ][
+    ; No zombies to fight, return to wandering
+    set state "wandering"
+  ]
+end
+
+; Update corpse state (decay over time)
+to update-corpse-state
+  ; Gradually change appearance
+  set size size - 0.01
+  if size < 0.5 [die]  ; Eventually disappear completely
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
@@ -189,9 +340,9 @@ SLIDER
 139
 initial-human-population
 initial-human-population
-0
-100
-50.0
+2
+10
+10.0
 1
 1
 NIL
@@ -205,8 +356,8 @@ SLIDER
 initial-zombie-population
 initial-zombie-population
 0
-100
-100.0
+30
+0.0
 1
 1
 NIL
@@ -221,22 +372,7 @@ initial-resource-count
 initial-resource-count
 0
 100
-50.0
-1
-1
-NIL
-HORIZONTAL
-
-SLIDER
-42
-261
-214
-294
-max-initial-groups
-max-initial-groups
-0
-100
-50.0
+35.0
 1
 1
 NIL
@@ -251,7 +387,7 @@ resource-regen-rate
 resource-regen-rate
 0
 100
-50.0
+66.0
 1
 1
 NIL
@@ -281,7 +417,7 @@ BUTTON
 67
 go
 go
-NIL
+T
 1
 T
 OBSERVER
