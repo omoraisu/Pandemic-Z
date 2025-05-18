@@ -44,6 +44,10 @@ zombies-own [
   satiation          ; increases when feeding, decreases over time
 ]
 
+resources-own [
+  amount
+]
+
 patches-own [
   resource-level     ; amount of available resources (0-100)
   is-shelter         ; boolean if patch is shelter
@@ -75,6 +79,11 @@ to setup-environment
 
     ; Random terrain coloring based on resource levels
     set pcolor scale-color green resource-level 0 100
+
+    ; Add hiding spots with 10% chance
+    if random-float 1 < 0.1 [
+      set pcolor one-of [black gray]
+    ]
   ]
 
   ; Create some shelters randomly throughout the map
@@ -149,6 +158,10 @@ to setup-resources
     set shape "box"
     set color yellow
     set size 1
+
+    ; Set amount value
+    set amount 10 + random 20
+
     move-to one-of patches with [not any? turtles-here]
   ]
 end
@@ -161,7 +174,7 @@ to go
 
   ; Update agents
   ask humans [human-behavior]
-  ; ask zombies [zombie-behavior]
+  ask zombies [zombie-behavior]
   ; ask corpses [update-corpse]
 
   ; Update global statistics
@@ -172,6 +185,7 @@ end
 
 ; ----- HUMAN BEHAVIOR PROCEDURES -----
 to human-behavior
+
   ; Skip if dead
   if state = "corpse" [update-corpse-state stop]
 
@@ -190,16 +204,16 @@ to human-behavior
   ]
 
   ; Handle infection progression
-  ; if state = "infected" [
-  ;  handle-infection
-  ;  stop
-  ; ]
+  if state = "infected" [
+    handle-infection
+    stop
+  ]
 
   ; State-based behavior
   (ifelse
     state = "wandering" [wander-behavior]
     state = "running" [run-behavior]
-    ; state = "hiding" [hide-behavior]
+    state = "hiding" [hide-behavior]
     state = "fighting" [fight-behavior]
   )
 
@@ -208,6 +222,12 @@ to human-behavior
   ;  eat-food
   ; ]
 end
+
+to zombie-behavior
+  rt random 50 - random 50
+  fd speed * 0.5
+end
+
 
 ; ----- STATE-SPECIFIC BEHAVIORS -----
 
@@ -218,15 +238,31 @@ to wander-behavior
   let visible-zombies zombies in-radius vision-range
   if any? visible-zombies [
     ; Zombies detected! Either run or fight
-    ifelse strength > 7 and count visible-zombies = 1 and skill-combat > 50 [
+    ifelse strength > 1 and count visible-zombies = 1 and skill-combat > 1 [
       set state "fighting"
-      face min-one-of visible-zombies [distance myself]
     ][
       set state "running"
-      set stress-level stress-level + 10
     ]
     stop
   ]
+
+  ; Second priority: Look for resources if hungry
+  if hunger-level > 50 or resource-inventory < 30 [
+    ; Find visible resource
+    let visible-resources resources in-radius vision-range
+    if any? visible-resources [
+      face min-one-of visible-resources [distance myself]
+      fd speed
+      ; Check if resource is reached
+      let nearby-resource one-of resources-here
+      if nearby-resource != nobody [
+        collect-resource nearby-resource
+      ]
+      stop
+    ]
+  ]
+
+  ;
 
   ; Default: Wander randomly - ALWAYS MOVE during wandering
   rt random 50 - random 50
@@ -236,6 +272,7 @@ end
 ; Running state - fleeing from zombies
 to run-behavior
   set color yellow
+
   ; Find zombies in visual range
   let visible-zombies zombies in-radius vision-range
 
@@ -245,17 +282,17 @@ to run-behavior
     if nearest-zombie != nobody [
       face nearest-zombie
       rt 180  ; Turn around
-      fd speed * 1.5  ; Run faster than normal
+      fd speed * 1.3  ; Run faster than normal
 
       ; Running consumes more energy
       set energy energy - 0.3
-      set stress-level min (list (stress-level + 1) 100)
+      set stress-level min (list (stress-level + 3) 100)
 
       ; Look for hiding spots
       if any? patches in-radius 2 with [pcolor = black or pcolor = gray] [
         move-to one-of patches in-radius 2 with [pcolor = black or pcolor = gray]
         set state "hiding"
-        set stress-level min (list (stress-level + 5) 100)
+        ; set stress-level max (list (stress-level - 3) 0)
       ]
     ]
   ][
@@ -265,41 +302,117 @@ to run-behavior
   ]
 end
 
-; Fighting state - combat with zombies
+to hide-behavior
+  set color orange
+  ; Do not move while hiding
+  ; Energy consumption reduced while hiding
+
+  ; Reduce stress
+  set stress-level max (list (stress-level - 3) 0)
+
+  ; Check if it's safe to come out
+  let visible-zombies zombies in-radius vision-range
+  if not any? visible-zombies [
+    ; Safe to come out of hiding
+    if random 100 < 70 [ ; 20% chance per tick to stop hiding ;NOTE: Change these values for later
+      set state "wandering"
+    ]
+  ]
+end
+
 to fight-behavior
   set color white
-  ; Find zombies in attack range
-  let zombies-to-fight zombies in-radius 1.5
+  let visible-zombies zombies in-radius vision-range
 
-  ifelse any? zombies-to-fight [
-    ; Target the closest zombie
-    let target min-one-of zombies-to-fight [distance myself]
+  ; Should there be a zombie, lock on 1 only
+  if any? visible-zombies [
+    let target min-one-of visible-zombies [distance myself]
+    face target
 
-    ; Calculate attack strength based on attributes
-    let attack-power strength + (skill-combat / 20) + random 3
-
-    ; Perform attack
-    ask target [
-      ; Zombie takes damage
-      set health health - attack-power
-      if health <= 0 [die]
+    ; Chase vs attack
+    ifelse distance target > 1 [
+      fd speed * 1.2
+      set energy energy - 0.2
+    ] [
+      ; now you’re close enough—attack!
+      let attack-power strength + (skill-combat / 20) + random 3
+      ask target [
+        set health health - attack-power
+        if health <= 0 [
+          die
+          ask myself [
+            set skill-combat min (list (skill-combat + 3) 100)
+          ]
+        ]
+      ]
+      set energy max (list (energy - 2) 0)
+      set stress-level min (list (stress-level + 3) 100)
     ]
 
-    ; Fighting consumes energy
-    set energy energy - 1
-    set stress-level min (list (stress-level + 2) 100)
-
-    ; Improve combat skill
-    set skill-combat min (list (skill-combat + 0.5) 100)
-
-    ; Check if we should continue fighting
-    if energy < 20 or count zombies-to-fight > 1 [
+    ; If low energy, run
+    if energy < 20 or (count zombies in-radius vision-range) > 1 [
       set state "running"
     ]
-  ][
-    ; No zombies to fight, return to wandering
-    set state "wandering"
   ]
+    ;; ELSE: no zombies at all
+    set state "wandering"
+end
+
+; ----- HELPER FUNCTIONS ----
+
+; Handle infection progression
+to handle-infection
+  set color violet
+
+  ; Infection timer counts down
+  set infection-timer max (list( infection-timer - 1) 0)
+
+  ; Infection drains energy
+  set energy max (list (energy - 2) 0)
+
+  ; Infected humans move erratically but slowly
+  rt random 90 - random 90
+  fd speed * 0.3
+
+  ; When timer reaches 0, turn into zombie
+  if infection-timer <= 0 [
+    transform-to-zombie
+  ]
+end
+
+to transform-to-zombie
+  ; Create new zombie at location
+  hatch-zombies 1 [
+    set shape "person"
+    set color red
+    set size 1.5
+    move-to one-of patches with [not any? turtles-here]
+
+    ; Initialize zombie properties
+    set health 75 + random 25          ; Initial health of zombie
+    set speed 0.3 + random-float 0.3   ; Zombies are slower than humans
+    set strength 8 + random 4          ; But stronger
+    set state "wandering"
+    set vision-range 3 + random 2      ; Poor vision
+    set hearing-range 6 + random 4     ; Good hearing
+    set satiation 0                    ; Start hungry
+  ]
+
+  ; Remove human
+  die
+end
+
+; Collect resource when found
+to collect-resource [res]
+  set color blue
+  ; Increase resource inventory
+  set resource-inventory resource-inventory + [amount] of res
+
+  ; Improve gathering skill
+  set skill-gathering min (list (skill-gathering + 3) 100)
+
+  ; Update resource
+  ask res [die] ; Resource is consumed
 end
 
 ; Update corpse state (decay over time)
@@ -375,22 +488,7 @@ initial-resource-count
 initial-resource-count
 0
 100
-35.0
-1
-1
-NIL
-HORIZONTAL
-
-SLIDER
-40
-315
-225
-348
-resource-regen-rate
-resource-regen-rate
-0
-100
-66.0
+0.0
 1
 1
 NIL
