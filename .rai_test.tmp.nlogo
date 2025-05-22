@@ -12,6 +12,7 @@ globals [
   total-survivors    ; count of remaining humans
   total-deaths       ; count of humans who died
   total-infections   ; count of humans who became zombies
+  total-conflicts    ; count of times when stress level across humans is high
   zombie-kill-count  ; zombies killed by humans
   resource-scarcity  ; global metric of resource availability (0-100)
 ]
@@ -186,7 +187,6 @@ end
 ; ----- HUMAN BEHAVIOR PROCEDURES -----
 to human-behavior
 
-  state = "
   ; Skip if dead
   if state = "corpse" [update-corpse-state stop]
 
@@ -219,9 +219,9 @@ to human-behavior
   )
 
   ; Consume resources if hungry
-  ; if hunger-level > 70 and resource-inventory > 0 [
-  ;  eat-food
-  ; ]
+  ;if hunger-level > 70 and resource-inventory > 0 [
+    eat-food
+   ]
 end
 
 to zombie-behavior
@@ -459,7 +459,7 @@ initial-human-population
 initial-human-population
 2
 10
-5.0
+10.0
 1
 1
 NIL
@@ -474,7 +474,7 @@ initial-zombie-population
 initial-zombie-population
 0
 30
-20.0
+0.0
 1
 1
 NIL
@@ -489,22 +489,7 @@ initial-resource-count
 initial-resource-count
 0
 100
-13.0
-1
-1
-NIL
-HORIZONTAL
-
-SLIDER
-40
-315
-225
-348
-resource-regen-rate
-resource-regen-rate
-0
-100
-66.0
+0.0
 1
 1
 NIL

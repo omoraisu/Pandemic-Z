@@ -12,6 +12,7 @@ globals [
   total-survivors    ; count of remaining humans
   total-deaths       ; count of humans who died
   total-infections   ; count of humans who became zombies
+  total-conflicts    ; count of times when stress level across humans is high
   zombie-kill-count  ; zombies killed by humans
   resource-scarcity  ; global metric of resource availability (0-100)
 ]
