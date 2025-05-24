@@ -262,9 +262,6 @@ to go
   ; Update conflict frequency tracking (do this AFTER agents act)
   update-conflict-frequency
 
-  ; Update global statistics
-  update-rct-stats
-
   ; Update and plot hunger statistics
   update-hunger-stats
   plot-hunger-data
@@ -377,12 +374,6 @@ to handle-superordinate-goals
   if zombie-density < 0.05 and superordinate-active? [
     set superordinate-active? false
   ]
-end
-
-; Update RCT-related statistics
-to update-rct-stats
-  ; Count current conflicts and cooperation
-  ; This would be called by specific conflict/cooperation events
 end
 
 ; ----- HUMAN BEHAVIOR PROCEDURES -----

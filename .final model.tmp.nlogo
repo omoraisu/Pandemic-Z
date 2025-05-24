@@ -262,8 +262,6 @@ to go
   ; Update conflict frequency tracking (do this AFTER agents act)
   update-conflict-frequency
 
-  ; Update global statistics
-  update-rct-stats
 
   ; Update and plot hunger statistics
   update-hunger-stats
@@ -368,7 +366,7 @@ to handle-superordinate-goals
 
     ; OPTION B: Reduce superordinate goal effect - only 10% reduction instead of 30%
     ask humans [
-      set resource-competition resource-competition * 0.  ; Was 0.7, now 0.9
+      set resource-competition resource-competition * 0.8  ; meaning 20% decrease in competition if superordinate is triggered
       set cooperation-level min (list (cooperation-level + 20) 100)
     ]
   ]
@@ -936,7 +934,7 @@ initial-human-population
 initial-human-population
 2
 10
-10.0
+8.0
 1
 1
 NIL
@@ -966,7 +964,7 @@ initial-resource-count
 initial-resource-count
 0
 100
-46.0
+19.0
 1
 1
 NIL
