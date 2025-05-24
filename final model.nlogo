@@ -51,6 +51,11 @@ humans-own [
   skill-combat       ; 0-100, improves with zombie fights
   skill-gathering    ; 0-100, improves with resource collection
 
+  ; NEW: Rest-related properties
+  fatigue-level      ; 0-100, builds up over time and with activity
+  rest-timer         ; how long they've been resting/hiding
+  hiding-reason      ; "safety", "rest", or "both" - tracks why they're hiding
+
  ; ----- RCT-Specific Properties -----
   group-loyalty      ; 0-100, affects in-group preference
   out-group-hostility ; 0-100, affects conflict likelihood
@@ -176,6 +181,11 @@ to setup-humans
     set skill-combat 10 + random 20
     set skill-gathering 10 + random 20
 
+    ; NEW: Initialize rest-related properties
+    set fatigue-level 0
+    set rest-timer 0
+    set hiding-reason "none"
+
     ; Not infected at start
     set infection-timer 0
 
@@ -294,7 +304,6 @@ to update-conflict-frequency
   ]
 end
 
-
 ; NEW procedure to plot total cumulative conflicts
 to plot-total-conflicts
   set-current-plot "Total Conflicts Over Time"
@@ -382,12 +391,19 @@ to human-behavior
   ; Skip if dead
   if state = "corpse" [update-corpse-state stop]
 
-  ; Basic metabolism
+  ; MODIFIED: Basic metabolism with fatigue
   set energy energy - 0.1
   set hunger-level hunger-level + 0.2
+  set fatigue-level fatigue-level + 0.3  ; NEW: Fatigue builds up over time
 
-  ; Update speed based on energy
-  set speed 0.1 + (energy / 100) * 0.9 ;Speed ranges from 0.1 to 1.0 based on energy
+  ; Activity increases fatigue more
+  if state = "running" [set fatigue-level fatigue-level + 0.8]
+  if state = "fighting" [set fatigue-level fatigue-level + 1.2]
+  if state = "wandering" [set fatigue-level fatigue-level + 0.2]
+
+  ; Update speed based on energy AND fatigue
+  let fatigue-penalty (fatigue-level / 100) * 0.3  ; Fatigue can reduce speed by up to 30%
+  set speed max (list 0.1 ((energy / 100) * 0.9 - fatigue-penalty))
 
   ; Death check (from hunger or no energy)
   if energy <= 0 or hunger-level >= 100 [
@@ -400,6 +416,17 @@ to human-behavior
   if state = "infected" [
     handle-infection
     stop
+  ]
+
+  ; MODIFIED: Check if human needs to rest (hide for sleep)
+  if (fatigue-level > 80 or energy < 20) and state != "hiding" and state != "running" [
+    ; Look for safe place to rest
+    if any? patches in-radius 3 with [pcolor = black or pcolor = gray or is-shelter] [
+      move-to one-of patches in-radius 3 with [pcolor = black or pcolor = gray or is-shelter]
+      set state "hiding"
+      set hiding-reason "rest"
+      set rest-timer 0
+    ]
   ]
 
   ; OPTION A: Allow stress conflicts even during zombie encounters
@@ -417,7 +444,7 @@ to human-behavior
   (ifelse
     state = "wandering" [wander-behavior]
     state = "running" [run-behavior]
-    state = "hiding" [hide-behavior]
+    state = "hiding" [hide-rest-behavior]  ; MODIFIED: New combined behavior
     state = "fighting" [fight-behavior]
   )
 
@@ -718,8 +745,112 @@ to handle-intragroup-interactions
   ]
 end
 
-; ----- EXISTING BEHAVIOR PROCEDURES (Enhanced with Options A & C) -----
-; Running state - fleeing from zombies
+; NEW: Combined hiding and resting behavior
+to hide-rest-behavior
+  ; Color coding based on why they're hiding
+  (ifelse
+    hiding-reason = "safety" [set color orange]      ; Orange: hiding from danger
+    hiding-reason = "rest" [set color cyan]          ; Cyan: resting/sleeping
+    hiding-reason = "both" [set color violet]        ; Violet: both safety and rest
+  )
+
+  ; Increment rest timer
+  set rest-timer rest-timer + 1
+
+  ; RESTING BENEFITS (but limited without food)
+  if hiding-reason = "rest" or hiding-reason = "both" [
+    ; Reduce fatigue while resting (primary benefit)
+    set fatigue-level max (list (fatigue-level - 2) 0)
+
+    ; Small energy recovery from rest, but much less than from food
+    set energy min (list (energy + 0.5) 100)
+
+    ; Reduce stress while resting
+    set stress-level max (list (stress-level - 2) 0)
+
+    ; Better rest in shelters
+    if [is-shelter] of patch-here [
+      set fatigue-level max (list (fatigue-level - 3) 0)  ; Extra fatigue reduction
+      set energy min (list (energy + 1) 100)              ; Slightly better energy recovery
+      set stress-level max (list (stress-level - 3) 0)    ; Extra stress reduction
+    ]
+  ]
+
+  ; SAFETY BENEFITS (traditional hiding)
+  if hiding-reason = "safety" or hiding-reason = "both" [
+    ; Reduce stress from hiding from danger
+    set stress-level max (list (stress-level - 3) 0)
+  ]
+
+  ; OPTION C: Even while resting, allow resource hoarding conflicts if critically desperate
+  if hunger-level > 95 and any? resources in-radius vision-range [
+    let nearby-humans other humans in-radius vision-range
+    if any? nearby-humans and random 100 < 15 [  ; 15% chance when desperately hungry
+      set state "wandering"  ; Break from hiding to compete for resources
+      set hiding-reason "none"
+      set rest-timer 0
+      initiate-intragroup-conflict nearby-humans
+    ]
+  ]
+
+  ; Check if should stop hiding/resting
+  let visible-zombies zombies in-radius vision-range
+  let should-stop-hiding false
+
+  ; Stop hiding from safety when no longer threatened
+  if hiding-reason = "safety" and not any? visible-zombies [
+    if random 100 < 70 [  ; 70% chance per tick to stop hiding from safety
+      set should-stop-hiding true
+    ]
+  ]
+
+  ; Stop resting when well-rested OR urgent needs
+  if hiding-reason = "rest" [
+    ; Stop if well-rested
+    if fatigue-level < 20 and energy > 60 [
+      set should-stop-hiding true
+    ]
+    ; Stop if urgent zombie threat
+    if any? visible-zombies [
+      set hiding-reason "safety"  ; Switch to hiding for safety
+      set should-stop-hiding false
+    ]
+    ; Stop if desperately hungry and resources available
+    if hunger-level > 90 and any? resources in-radius vision-range [
+      set should-stop-hiding true
+    ]
+  ]
+
+  ; Handle "both" case
+  if hiding-reason = "both" [
+    ; Only stop when both conditions are met: safe and rested
+    if not any? visible-zombies and fatigue-level < 20 and energy > 60 [
+      if random 100 < 50 [  ; 50% chance to stop when both conditions met
+        set should-stop-hiding true
+      ]
+    ]
+    ; Or if desperately hungry
+    if hunger-level > 90 and any? resources in-radius vision-range [
+      set should-stop-hiding true
+    ]
+  ]
+
+  ; Actually stop hiding if conditions are met
+  if should-stop-hiding [
+    set state "wandering"
+    set hiding-reason "none"
+    set rest-timer 0
+  ]
+
+  ; Force wake up if hiding too long (avoid getting stuck)
+  if rest-timer > 50 [  ; After 50 ticks of hiding
+    set state "wandering"
+    set hiding-reason "none"
+    set rest-timer 0
+  ]
+end
+
+; MODIFIED: Running state - fleeing from zombies with rest consideration
 to run-behavior
   set color yellow
 
@@ -742,48 +873,23 @@ to run-behavior
       rt 180  ; Turn around
       fd speed * 1.3  ; Run faster than normal
 
-      ; Running consumes more energy
+      ; Running consumes more energy AND increases fatigue significantly
       set energy energy - 0.3
+      set fatigue-level min (list (fatigue-level + 1.5) 100)  ; NEW: Running is very tiring
       set stress-level min (list (stress-level + 3) 100)
 
       ; Look for hiding spots
-      if any? patches in-radius 2 with [pcolor = black or pcolor = gray] [
-        move-to one-of patches in-radius 2 with [pcolor = black or pcolor = gray]
+      if any? patches in-radius 2 with [pcolor = black or pcolor = gray or is-shelter] [
+        move-to one-of patches in-radius 2 with [pcolor = black or pcolor = gray or is-shelter]
         set state "hiding"
-        ; set stress-level max (list (stress-level - 3) 0)
+        set hiding-reason "safety"  ; NEW: Hiding for safety, not rest
+        set rest-timer 0
       ]
     ]
   ][
     ; No zombies visible anymore, return to wandering
     set state "wandering"
     set stress-level max (list (stress-level - 5) 0)  ; Reduce stress slightly
-  ]
-end
-
-to hide-behavior
-  set color orange
-  ; Do not move while hiding
-  ; Energy consumption reduced while hiding
-
-  ; Reduce stress
-  set stress-level max (list (stress-level - 3) 0)
-
-  ; OPTION C: Even while hiding, allow resource hoarding conflicts if critically desperate
-  if hunger-level > 95 and any? resources in-radius vision-range [
-    let nearby-humans other humans in-radius vision-range
-    if any? nearby-humans and random 100 < 15 [  ; 15% chance when desperately hungry
-      set state "wandering"  ; Break from hiding to compete for resources
-      initiate-intragroup-conflict nearby-humans
-    ]
-  ]
-
-  ; Check if it's safe to come out
-  let visible-zombies zombies in-radius vision-range
-  if not any? visible-zombies [
-    ; Safe to come out of hiding
-    if random 100 < 70 [ ; 70% chance per tick to stop hiding
-      set state "wandering"
-    ]
   ]
 end
 
@@ -808,6 +914,7 @@ to fight-behavior
     ifelse distance target > 1 [
       fd speed * 1.2
       set energy energy - 0.2
+      set fatigue-level min (list (fatigue-level + 0.8) 100)  ; NEW: Fighting is tiring
     ] [
       ; now you're close enough—attack!
       let attack-power strength + (skill-combat / 20) + random 3
@@ -821,17 +928,28 @@ to fight-behavior
         ]
       ]
       set energy max (list (energy - 2) 0)
+      set fatigue-level min (list (fatigue-level + 2) 100)  ; NEW: Combat is very tiring
       set stress-level min (list (stress-level + 3) 100)
     ]
 
-    ; If low energy, run
-    if energy < 20 or (count zombies in-radius vision-range) > 1 [
-      set state "running"
+    ; If low energy OR very fatigued, run or hide to rest
+    if energy < 20 or fatigue-level > 85 or (count zombies in-radius vision-range) > 1 [
+      ifelse fatigue-level > 85 [
+        ; Too tired to keep running, need to hide and rest
+        if any? patches in-radius 3 with [pcolor = black or pcolor = gray or is-shelter] [
+          move-to one-of patches in-radius 3 with [pcolor = black or pcolor = gray or is-shelter]
+          set state "hiding"
+          set hiding-reason "both"  ; NEW: Hiding for both safety and rest
+          set rest-timer 0
+        ]
+      ][
+        set state "running"
+      ]
     ]
-  ]
+  ] [
     ; ELSE: no zombies at all
     set state "wandering"
-
+  ]
 end
 
 ; ----- HELPER FUNCTIONS ----
@@ -843,8 +961,9 @@ to handle-infection
   ; Infection timer counts down
   set infection-timer max (list( infection-timer - 1) 0)
 
-  ; Infection drains energy
+  ; Infection drains energy and increases fatigue
   set energy max (list (energy - 2) 0)
+  set fatigue-level min (list (fatigue-level + 1) 100)  ; NEW: Infection is exhausting
 
   ; Infected humans move erratically but slowly
   rt random 90 - random 90
@@ -883,9 +1002,13 @@ to collect-resource [res]
   set color blue
   ; Increase resource inventory
   set resource-inventory resource-inventory + [amount] of res
+  set stress-level max (list (stress-level - 3) 0)
 
   ; Improve gathering skill
   set skill-gathering min (list (skill-gathering + 3) 100)
+
+  ; Resource gathering increases fatigue slightly
+  set fatigue-level min (list (fatigue-level + 0.5) 100)  ; NEW: Gathering is work
 
   ; Update resource
   ask res [die] ; Resource is consumed
@@ -1054,6 +1177,16 @@ false
 "" ""
 PENS
 "total-conflicts" 1.0 0 -2674135 true "" ""
+
+TEXTBOX
+730
+275
+931
+443
+Pink: Neutral state\nBrown: Competing for resources\nMagenta: Cooperating with others\nBlue: Hostile toward group members\nRed: In active conflict (larger size too)\nYellow: Running from zombies\nWhite: Fighting zombies
+11
+0.0
+1
 
 @#$#@#$#@
 ## WHAT IS IT?
