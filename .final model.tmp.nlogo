@@ -368,7 +368,7 @@ to handle-superordinate-goals
 
     ; OPTION B: Reduce superordinate goal effect - only 10% reduction instead of 30%
     ask humans [
-      set resource-competition resource-competition * 0.8  ; meaning 20% decrease in competition if superordinate is triggered
+      set resource-competition resource-competition * 0.  ; Was 0.7, now 0.9
       set cooperation-level min (list (cooperation-level + 20) 100)
     ]
   ]
@@ -936,7 +936,7 @@ initial-human-population
 initial-human-population
 2
 10
-8.0
+10.0
 1
 1
 NIL
@@ -966,7 +966,7 @@ initial-resource-count
 initial-resource-count
 0
 100
-19.0
+46.0
 1
 1
 NIL
