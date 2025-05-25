@@ -15,6 +15,7 @@ globals [
   total-conflicts    ; count of times when stress level across humans is high
   zombie-kill-count  ; zombies killed by humans
   resource-scarcity  ; global metric of resource availability (0-100)
+  cooperation-events
 ]
 
 ; ----- AGENT PROPERTIES -----
@@ -33,6 +34,11 @@ humans-own [
   infection-timer    ; countdown if infected
   skill-combat       ; 0-100, improves with zombie fights
   skill-gathering    ; 0-100, improves with resource collection
+  role               ; "generalist", "defender", "gatherer"
+  last-action        ;
+  combat-actions     ;
+  gathering-actions
+  cooperation-count
 ]
 
 zombies-own [
@@ -65,6 +71,7 @@ to setup
   setup-humans
   setup-zombies
   setup-resources
+  set cooperation-events 0
   reset-ticks
 end
 
@@ -118,13 +125,20 @@ to setup-humans
     set hearing-range 3 + random 2
     set resource-inventory 20 + random 30
     set hunger-level 0
-    set stress-level 20 + random 20
+    set stress-level 0
     set trust-level 50 + random 50
     set cooperation-level 50 + random 50
 
     ; Skills start relatively low
     set skill-combat 10 + random 20
     set skill-gathering 10 + random 20
+
+    ; role
+    set role "generalist"
+    set last-action "none"
+    set combat-actions 0
+    set gathering-actions 0
+    set cooperation-count 0
 
     ; Not infected at start
     set infection-timer 0
@@ -169,8 +183,15 @@ end
 
 ; ----- MAIN PROCEDURES -----
 to go
+  if not any? humans [ stop ]       ;End simulation if no survivors
   ; Update time and environment
+  ; Daily cycle
+  if ticks mod 100 = 0 [
+    set day day + 1
+    update-human-roles
+  ]
   ; update-time
+
   ; update-resources
 
   ; Update agents
@@ -222,6 +243,16 @@ to human-behavior
   ; if hunger-level > 70 and resource-inventory > 0 [
   ;  eat-food
   ; ]
+
+  ask humans [
+    if energy > 0 [
+      assess-environment
+      choose-action
+      execute-action
+      update-stress
+      update-energy
+    ]
+  ]
 end
 
 to zombie-behavior
@@ -229,6 +260,240 @@ to zombie-behavior
   fd speed * 0.5
 end
 
+; Core self-organization: agents assess local environment
+to assess-environment
+  let nearby-zombies zombies in-radius 5
+  let nearby-resources resources in-radius 3
+  let nearby-humans other humans in-radius 4
+
+  ; Calculate stress based on environmental pressures
+  set stress-level 0
+
+  ; Stress from zombies (distance-weighted)
+  ask nearby-zombies [
+    ask myself [
+       run-behavior
+    ]
+  ]
+
+  ; Reduced stress from cooperation (nearby agents)
+  if count nearby-humans > 0 [
+    set stress-level stress-level - (count nearby-humans * 2)
+  ]
+
+  ; Stress from low resources
+  if energy < 30 [
+    set stress-level stress-level + (30 - energy) / 3
+  ]
+
+  set stress-level max list 0 stress-level
+end
+
+; Dynamic decision-making based on local conditions
+to choose-action
+  let nearby-zombies zombies in-radius 5
+  let nearby-resources resources in-radius 3
+
+  ; Decision logic based on environmental pressures
+  ifelse stress-level > 15 and any? nearby-zombies [
+    ; High stress + zombies = combat response
+    set last-action "combat"
+  ] [
+    ifelse energy < 40 and any? nearby-resources [
+      ; Low energy + resources available = gathering response
+      set last-action "gathering"
+    ] [
+        ; Default: move toward resources or away from threats
+        set last-action "movement"
+      ]
+    ]
+end
+
+; Execute chosen action and gain experience
+to execute-action
+  if last-action = "combat" [
+    combat-nearby-zombies
+    set combat-actions combat-actions + 1
+    set skill-combat skill-combat + 0.5  ; Skill improvement through practice
+  ]
+
+  if last-action = "gathering" [
+    gather-nearby-resources
+    set gathering-actions gathering-actions + 1
+    set skill-gathering skill-gathering + 0.5  ; Skill improvement through practice
+  ]
+
+  if last-action = "cooperation" [
+    help-nearby-humans
+    set cooperation-count cooperation-count + 1
+    set cooperation-events cooperation-events + 1
+  ]
+
+  if last-action = "movement" [
+    move-strategically
+  ]
+end
+
+; Combat behavior - effectiveness depends on skill
+to combat-nearby-zombies
+  let target one-of zombies in-radius 2
+  if target != nobody [
+    let combat-effectiveness skill-combat + random 10
+    ask target [
+      set health health - combat-effectiveness
+    ]
+    set energy energy - 5  ; Combat costs energy
+  ]
+end
+
+; Resource gathering - effectiveness depends on skill
+to gather-nearby-resources
+  let target one-of resources in-radius 2
+  if target != nobody [
+    let gathering-effectiveness skill-gathering + random 5
+    let gathered min list [amount] of target gathering-effectiveness
+    ask target [ set amount amount - gathered ]
+    set energy energy + gathered
+    set resource-scarcity resource-scarcity + gathered
+    set energy min list energy 100  ; Cap energy at 100
+  ]
+end
+
+; Cooperation behavior - agents help each other
+to help-nearby-humans
+  let target one-of other humans in-radius 3 with [energy < 80]
+  if target != nobody [
+    ask target [
+      set energy energy + 10
+      set stress-level max list 0 (stress-level - 5)
+    ]
+    set energy energy - 3  ; Helping costs energy
+  ]
+end
+
+to move-strategically
+  let nearby-zombies zombies in-radius 10
+  let nearby-resources resources in-radius 10
+
+  ifelse role = "defender" and any? nearby-zombies [
+    ; Defenders move toward threats
+    face min-one-of nearby-zombies [distance myself]
+    forward 0.5
+  ] [
+    ifelse role = "gatherer" and any? nearby-resources [
+      ; Gatherers move toward resources
+      face min-one-of nearby-resources [distance myself]
+      forward 0.7
+    ] [
+      ; Generalists balance between threats and resources
+      if any? nearby-zombies and any? nearby-resources [
+        let threat-distance [distance myself] of min-one-of nearby-zombies [distance myself]
+        let resource-distance [distance myself] of min-one-of nearby-resources [distance myself]
+
+        ifelse threat-distance < resource-distance [
+          face min-one-of nearby-zombies [distance myself]
+          back 0.5  ; Move away from threats
+        ] [
+          face min-one-of nearby-resources [distance myself]
+          forward 0.5  ; Move toward resources
+        ]
+      ]
+    ]
+  ]
+
+  set energy energy - 1  ; Movement costs energy
+end
+
+
+; Update stress based on recent experiences
+to update-stress
+  ; Gradual stress reduction over time
+  set stress-level stress-level * 0.95
+
+  ; Health affects stress
+  if energy < 50 [
+    set stress-level stress-level + 2
+  ]
+
+  set stress-level max list 0 stress-level
+end
+
+; Update energy and health
+to update-energy
+  set energy energy - 0.5  ; Gradual energy loss
+
+  if energy <= 0 [
+    set strength 0
+  ]
+
+end
+
+to update-human-roles
+  ask humans [
+    let total-actions combat-actions + gathering-actions
+
+    if total-actions > 10 [
+      let combat-ratio combat-actions / total-actions
+      let gathering-ratio gathering-actions / total-actions
+
+      ; Role specialization thresholds
+      ifelse combat-ratio > 0.6 [
+        set role "defender"
+        set color red
+      ] [
+        ifelse gathering-ratio > 0.6 [
+          set role "gatherer"
+          set color yellow
+        ] [
+          set role "generalist"
+          set color blue
+        ]
+      ]
+    ]
+  ]
+end
+
+
+; Reporters for monitoring emergent behavior
+to-report survival-rate
+  ifelse total-survivors > 0 [
+    report (count humans / total-survivors) * 100
+  ] [
+    report 0
+  ]
+end
+
+to-report defender-ratio
+  ifelse count humans > 0 [
+    report (count humans with [role = "defender"] / count humans) * 100
+  ] [
+    report 0
+  ]
+end
+
+to-report gatherer-ratio
+  ifelse count humans > 0 [
+    report (count humans with [role = "gatherer"] / count humans) * 100
+  ] [
+    report 0
+  ]
+end
+
+to-report average-stress
+  ifelse count humans > 0 [
+    report mean [stress-level] of humans
+  ] [
+    report 0
+  ]
+end
+
+to-report cooperation-index
+  ifelse count humans > 0 [
+    report cooperation-events / ticks
+  ] [
+    report 0
+  ]
+end
 
 ; ----- STATE-SPECIFIC BEHAVIORS -----
 
@@ -272,36 +537,38 @@ end
 
 ; Running state - fleeing from zombies
 to run-behavior
-  set color yellow
+  set color yellow ; Indicate running state visually
 
-  ; Find zombies in visual range
   let visible-zombies zombies in-radius vision-range
 
   ifelse any? visible-zombies [
-    ; Run away from nearest zombie
     let nearest-zombie min-one-of visible-zombies [distance myself]
+
     if nearest-zombie != nobody [
       face nearest-zombie
-      rt 180  ; Turn around
-      fd speed * 1.3  ; Run faster than normal
+      rt 180        ; Turn away
+      fd speed * 1.3  ; Move away quickly
 
-      ; Running consumes more energy
+      ; Running uses more energy and raises stress
       set energy energy - 0.3
       set stress-level min (list (stress-level + 3) 100)
 
-      ; Look for hiding spots
-      if any? patches in-radius 2 with [pcolor = black or pcolor = gray] [
-        move-to one-of patches in-radius 2 with [pcolor = black or pcolor = gray]
+
+      ; Try to find hiding patches
+      let hiding-patch one-of patches in-radius 2 with [pcolor = black or pcolor = gray]
+      if hiding-patch != nobody [
+        move-to hiding-patch
         set state "hiding"
-        ; set stress-level max (list (stress-level - 3) 0)
       ]
     ]
-  ][
-    ; No zombies visible anymore, return to wandering
+  ] [
+    ; No zombies in sight — calm down
     set state "wandering"
-    set stress-level max (list (stress-level - 5) 0)  ; Reduce stress slightly
+    set stress-level max (list (stress-level - 5) 0)
+
   ]
 end
+
 
 to hide-behavior
   set color orange
@@ -338,8 +605,8 @@ to fight-behavior
       ; now you’re close enough—attack!
       let attack-power strength + (skill-combat / 20) + random 3
       ask target [
-        set health health - attack-power
-        if health <= 0 [
+        set energy energy - attack-power
+        if energy <= 0 [
           die
           ask myself [
             set skill-combat min (list (skill-combat + 3) 100)
@@ -451,10 +718,10 @@ ticks
 30.0
 
 SLIDER
-32
-106
-242
-139
+10
+105
+220
+138
 initial-human-population
 initial-human-population
 2
@@ -474,7 +741,7 @@ initial-zombie-population
 initial-zombie-population
 0
 30
-0.0
+5.0
 1
 1
 NIL
@@ -489,7 +756,7 @@ initial-resource-count
 initial-resource-count
 0
 100
-0.0
+33.0
 1
 1
 NIL
@@ -888,5 +1155,5 @@ true
 Line -7500403 true 150 150 90 180
 Line -7500403 true 150 150 210 180
 @#$#@#$#@
-0
+1
 @#$#@#$#@
