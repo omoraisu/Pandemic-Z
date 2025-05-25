@@ -688,7 +688,7 @@ to zombie-wander
     let all-detected-humans (turtle-set nearby-humans heard-humans)
     set target-human min-one-of all-detected-humans [distance myself]
     set state "chasing"
-    set chase-timer 60  ; Give up after 100 ticks if can't catch
+    set chase-timer   ; Give up after 100 ticks if can't catch
     set horde-leader? true  ; First to spot becomes leader
     stop
   ]
