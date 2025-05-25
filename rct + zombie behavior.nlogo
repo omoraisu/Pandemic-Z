@@ -70,10 +70,23 @@ zombies-own [
   health             ; 0-100
   speed              ; typically slower than humans
   strength           ; determines damage to humans
-  state              ; "wandering", "chasing", "feeding"
+  state              ; "wandering", "chasing", "feeding", "following-horde", "breaking-in"
   vision-range       ; typically poor
   hearing-range      ; typically good
   satiation          ; increases when feeding, decreases over time
+
+  target-human       ; which human this zombie is chasing
+  horde-leader?      ; is this zombie leading a horde chase
+  following-zombie   ; which zombie this one is following in horde
+  chase-timer        ; how long they've been chasing current target
+
+  age-ticks          ; how long this zombie has existed
+  decay-rate         ; individual decay speed (varies by zombie)
+  max-lifespan       ; when this zombie will die from decay (3-5 years in ticks)
+
+  ; SHELTER BREAKING PROPERTIES
+  target-shelter     ; which shelter this zombie is trying to break into
+  break-progress     ; progress on breaking into current shelter
 ]
 
 resources-own [
@@ -91,6 +104,12 @@ patches-own [
   last-visited       ; when patch was last visited by any agent
   territory-marker   ; which group "claims" this area
   conflict-zone?     ; whether this area has seen recent conflicts
+
+  ; NEW SHELTER PROPERTIES
+  shelter-integrity  ; 0-100, how intact the shelter is
+  being-broken?      ; boolean, is zombie currently breaking in
+  break-timer        ; ticks needed to break in completely
+  max-break-time     ; total time needed to break in (varies by shelter quality)
 ]
 
 ; ----- SETUP PROCEDURES -----
@@ -133,6 +152,12 @@ to setup-environment
     set territory-marker 0
     set conflict-zone? false
 
+    ; NEW: Initialize shelter properties
+    set shelter-integrity 100
+    set being-broken? false
+    set break-timer 0
+    set max-break-time 0
+
     ; Random terrain coloring based on resource levels
     set pcolor scale-color green resource-level 0 100
 
@@ -143,11 +168,17 @@ to setup-environment
   ]
 
   ; Create some shelters randomly throughout the map
-  let shelter-count (count patches) * 0.005  ; 2% of patches are shelters
+  let shelter-count (count patches) * 0.01  ; 0.5% of patches are shelters
   ask n-of shelter-count patches [
     set is-shelter true
     set shelter-quality 50 + random 50  ; Varied shelter quality
     set pcolor brown
+
+    ; NEW: Set shelter breaking properties based on quality
+    set shelter-integrity 100
+    set max-break-time (shelter-quality / 2) + 30  ; 55-80 ticks to break in
+    set being-broken? false
+    set break-timer 0
   ]
 
   ; Set initial values
@@ -229,6 +260,18 @@ to setup-zombies
     set vision-range 3 + random 2      ; Poor vision
     set hearing-range 6 + random 4     ; Good hearing
     set satiation 0                    ; Start hungry
+
+    ; NEW: Initialize horde behavior properties
+    set target-human nobody
+    set horde-leader? false
+    set following-zombie nobody
+    set chase-timer 0
+
+    ; NEW: Initialize decay properties
+    set age-ticks 0
+    set decay-rate 0.01 + random-float 0.02  ; Individual variation in decay rate
+    ; 3-5 years = roughly 1095-1825 days = 26280-43800 ticks (assuming 24 ticks/day)
+    set max-lifespan 26280 + random 17520  ; 3-5 years with variation
   ]
 end
 
@@ -578,9 +621,316 @@ to update-corpse-state
   ]
 end
 
+; ----- ZOMBIE BEHAVIORS -----
+
 to zombie-behavior
-  rt random 50 - random 50
+  ; Handle decay first
+  handle-zombie-decay
+
+  ; Skip behavior if dead from decay
+  if health <= 0 [ die stop ]
+
+  ; Update chase timer
+  if chase-timer > 0 [
+    set chase-timer chase-timer - 1
+  ]
+
+  ; State-based behavior
+  (ifelse
+    state = "wandering" [zombie-wander]
+    state = "chasing" [zombie-chase]
+    state = "following-horde" [zombie-follow-horde]
+    state = "feeding" [zombie-feed]
+    state = "breaking-in" [zombie-break-shelter]  ; NEW STATE
+  )
+
+  ; Check for horde opportunities while wandering or chasing
+  if state = "wandering" or state = "chasing" [
+    check-for-horde-behavior
+  ]
+end
+
+
+to handle-zombie-decay
+  set age-ticks age-ticks + 1
+
+  ; Apply decay damage based on age and individual decay rate
+  if age-ticks > (365 * 24 * 3) [  ; After 3 years (rough tick conversion)
+    let decay-damage decay-rate * (age-ticks / 1000)  ; Gradual decay
+    set health health - decay-damage
+
+    ; Visual indication of decay
+    if health < 50 [
+      set color scale-color red health 0 100  ; Darker red as health decreases
+    ]
+
+    ; Reduce capabilities as they decay
+    if health < 30 [
+      set speed speed * 0.8  ; Slower movement
+      set strength strength * 0.9  ; Weaker attacks
+      set vision-range max (list (vision-range - 0.1) 1)  ; Worse vision
+    ]
+  ]
+
+  ; Death from old age/decay
+  if age-ticks >= max-lifespan [
+    set health 0  ; Will die in main behavior check
+  ]
+end
+
+; NEW: Basic zombie wandering behavior
+to zombie-wander
+  ; Look for humans to chase
+  let nearby-humans humans in-radius vision-range
+  let heard-humans humans in-radius hearing-range
+
+  ; Start chasing if human detected
+  if any? nearby-humans or any? heard-humans [
+    let all-detected-humans (turtle-set nearby-humans heard-humans)
+    set target-human min-one-of all-detected-humans [distance myself]
+    set state "chasing"
+    set chase-timer 100  ; Give up after 100 ticks if can't catch
+    set horde-leader? true  ; First to spot becomes leader
+    stop
+  ]
+
+  ; Random wandering
+  rt random 60 - random 30
   fd speed * 0.5
+
+  ; Reduce satiation over time
+  set satiation max (list (satiation - 0.1) 0)
+end
+
+; MODIFIED: Enhanced zombie chasing with shelter detection
+to zombie-chase
+  ; Check if target still exists and is in range
+  if target-human = nobody or [state] of target-human = "corpse" [
+    set state "wandering"
+    set target-human nobody
+    set horde-leader? false
+    set chase-timer 0
+    stop
+  ]
+
+  ; Give up chase if timer expires or target too far
+  if chase-timer <= 0 or distance target-human > (vision-range * 3) [
+    set state "wandering"
+    set target-human nobody
+    set horde-leader? false
+    set chase-timer 0
+    stop
+  ]
+
+  ; Check if target is in a shelter
+  if [state] of target-human = "hiding" and [[is-shelter] of patch-here] of target-human [
+    let target-shelter-patch [patch-here] of target-human
+
+    ; Check if shelter is intact
+    if [shelter-integrity] of target-shelter-patch > 0 [
+      ; Switch to breaking-in behavior
+      set state "breaking-in"
+      set target-shelter target-shelter-patch
+      set break-progress 0
+      stop
+    ]
+  ]
+
+  ; Normal chase behavior
+  face target-human
+  fd speed
+
+  ; Attack if close enough AND not in intact shelter
+  if distance target-human < 1 [
+    let target-in-shelter false
+    if [state] of target-human = "hiding" and [[is-shelter] of patch-here] of target-human [
+      if [[shelter-integrity] of patch-here] of target-human > 0 [
+        set target-in-shelter true
+      ]
+    ]
+
+    ; Only attack if not protected by intact shelter
+    if not target-in-shelter [
+      attack-human target-human
+    ]
+  ]
+
+  ; Emit "chase signal" for other zombies to detect
+  ask patch-here [
+    set zombie-scent zombie-scent + 5  ; Strong scent when chasing
+  ]
+end
+
+; NEW: Zombie following horde behavior
+to zombie-follow-horde
+  ; Check if still following valid zombie
+  if following-zombie = nobody or [state] of following-zombie != "chasing" [
+    set state "wandering"
+    set following-zombie nobody
+    set target-human nobody
+    stop
+  ]
+
+  ; Follow the leader zombie
+  face following-zombie
+  fd speed * 0.9  ; Slightly slower than leader
+
+  ; If close enough to leader's target, switch to chasing same target
+  if [target-human] of following-zombie != nobody [
+    set target-human [target-human] of following-zombie
+    if distance target-human < vision-range [
+      set state "chasing"
+      set following-zombie nobody
+      set chase-timer 80  ; Shorter timer for followers
+    ]
+  ]
+end
+
+; NEW: Check for horde behavior opportunities
+to check-for-horde-behavior
+  ; Only join horde if not already leading one
+  if not horde-leader? and state != "following-horde" [
+    ; Look for other zombies chasing humans
+    let chasing-zombies other zombies in-radius (hearing-range * 1.5) with [
+      state = "chasing" and target-human != nobody
+    ]
+
+    if any? chasing-zombies [
+      ; Join the nearest chasing zombie's horde
+      let leader min-one-of chasing-zombies [distance myself]
+
+      ; Only join if the target is reasonably close
+      if distance [target-human] of leader < (hearing-range * 2) [
+        set following-zombie leader
+        set target-human [target-human] of leader
+        set state "following-horde"
+        set chase-timer 60  ; Shorter commitment for followers
+
+        ; Visual feedback - make horde zombies slightly different color
+        set color scale-color red 50 0 100  ; Darker red for horde followers
+      ]
+    ]
+  ]
+end
+
+; NEW: Zombie feeding behavior
+to zombie-feed
+  set satiation min (list (satiation + 5) 100)
+
+  ; Return to wandering after feeding
+  if satiation > 80 [
+    set state "wandering"
+  ]
+end
+
+; MODIFIED: Attack human procedure with infection fix
+to attack-human [target]
+  if target != nobody [
+    ask target [
+      ; Take damage
+      set energy energy - [strength] of myself
+      set stress-level min (list (stress-level + 20) 100)
+
+      ; FIXED: Higher infection chance and better handling
+      if random 100 < 50 [  ; 50% infection chance (increased from 30%)
+        if state != "infected" [  ; Only infect if not already infected
+          set state "infected"
+          set infection-timer 50 + random 50  ; 50-100 ticks to turn
+          set color violet  ; Visual indication of infection
+        ]
+      ]
+
+      ; Death from attack
+      if energy <= 0 [
+        ; If infected, they still turn into zombie upon death
+        if-else state = "infected" [
+          transform-to-zombie
+        ] [
+          set state "corpse"
+          set color gray
+          set total-deaths total-deaths + 1
+          set total-survivors total-survivors - 1
+        ]
+      ]
+    ]
+
+    ; Zombie enters feeding state
+    set state "feeding"
+    set satiation satiation + 20
+    set target-human nobody
+    set horde-leader? false
+    set chase-timer 0
+  ]
+end
+
+; NEW: Zombie shelter breaking behavior
+to zombie-break-shelter
+  ; Check if target shelter still exists and is valid
+  if target-shelter = nobody or not [is-shelter] of target-shelter [
+    set state "wandering"
+    set target-shelter nobody
+    set break-progress 0
+    stop
+  ]
+
+  ; Move toward the shelter if not there yet
+  if patch-here != target-shelter [
+    face target-shelter
+    fd speed * 0.5  ; Move slower while focused on breaking in
+    stop
+  ]
+
+  ; We're at the shelter, start/continue breaking in
+  ask target-shelter [
+    set being-broken? true
+    set break-timer break-timer + 1
+
+    ; Visual indication of shelter being attacked
+    set pcolor scale-color red break-timer 0 max-break-time
+  ]
+
+  set break-progress break-progress + 1
+
+  ; FIXED: Store max-break-time in a variable to avoid repeated access
+  let shelter-max-break-time [max-break-time] of target-shelter
+
+  ; Check if we've broken through
+  if break-progress >= shelter-max-break-time [
+    ; Successfully broke into shelter
+    ask target-shelter [
+      set shelter-integrity 0
+      set being-broken? false
+      set pcolor gray  ; Broken shelter
+    ]
+
+    ; Attack any humans in the broken shelter
+    let humans-in-shelter humans-on target-shelter
+    if any? humans-in-shelter [
+      set target-human one-of humans-in-shelter
+      attack-human target-human
+    ]
+
+    ; Reset breaking state
+    set state "wandering"
+    set target-shelter nobody
+    set break-progress 0
+  ]
+
+  ; FIXED: Give up if taking too long (zombie attention span)
+  if break-progress > (shelter-max-break-time + 50) [
+    set state "wandering"
+    set target-shelter nobody
+    set break-progress 0
+
+    ; FIXED: Check if target-shelter still exists before asking it to do things
+    if target-shelter != nobody [
+      ask target-shelter [
+        set being-broken? false
+        set break-timer 0
+        set pcolor brown  ; Reset shelter color
+      ]
+    ]
+  ]
 end
 
 ; ----- STATE-SPECIFIC BEHAVIORS -----
@@ -745,48 +1095,70 @@ to handle-intragroup-interactions
   ]
 end
 
-; NEW: Combined hiding and resting behavior
+; MODIFIED: Enhanced hiding behavior with shelter protection
 to hide-rest-behavior
-  ; Color coding based on why they're hiding
+  ; Color coding based on why they're hiding and shelter status
+  let in-intact-shelter (is-shelter and shelter-integrity > 0)
+
   (ifelse
-    hiding-reason = "safety" [set color orange]      ; Orange: hiding from danger
-    hiding-reason = "rest" [set color cyan]          ; Cyan: resting/sleeping
-    hiding-reason = "both" [set color violet]        ; Violet: both safety and rest
+    hiding-reason = "safety" and in-intact-shelter [set color blue]        ; Blue: safe in intact shelter
+    hiding-reason = "safety" [set color orange]                            ; Orange: hiding unsafely
+    hiding-reason = "rest" and in-intact-shelter [set color turquoise]     ; Turquoise: resting safely
+    hiding-reason = "rest" [set color cyan]                                ; Cyan: resting unsafely
+    hiding-reason = "both" and in-intact-shelter [set color magenta]       ; Magenta: both, safely
+    hiding-reason = "both" [set color 47]                                  ; Darker Yellow: both, unsafely
   )
 
   ; Increment rest timer
   set rest-timer rest-timer + 1
 
-  ; RESTING BENEFITS (but limited without food)
-  if hiding-reason = "rest" or hiding-reason = "both" [
-    ; Reduce fatigue while resting (primary benefit)
-    set fatigue-level max (list (fatigue-level - 2) 0)
+  ; Check if shelter is being attacked
+  if is-shelter and being-broken? [
+    ; Increase stress when shelter is under attack
+    set stress-level min (list (stress-level + 5) 100)
 
-    ; Small energy recovery from rest, but much less than from food
-    set energy min (list (energy + 0.5) 100)
-
-    ; Reduce stress while resting
-    set stress-level max (list (stress-level - 2) 0)
-
-    ; Better rest in shelters
-    if [is-shelter] of patch-here [
-      set fatigue-level max (list (fatigue-level - 3) 0)  ; Extra fatigue reduction
-      set energy min (list (energy + 1) 100)              ; Slightly better energy recovery
-      set stress-level max (list (stress-level - 3) 0)    ; Extra stress reduction
+    ; Chance to flee if shelter is almost broken
+    if break-timer > (max-break-time * 0.7) and random 100 < 30 [
+      set state "running"
+      set hiding-reason "none"
+      set rest-timer 0
+      stop
     ]
   ]
 
-  ; SAFETY BENEFITS (traditional hiding)
-  if hiding-reason = "safety" or hiding-reason = "both" [
-    ; Reduce stress from hiding from danger
-    set stress-level max (list (stress-level - 3) 0)
+  ; RESTING BENEFITS (enhanced in intact shelters)
+  if hiding-reason = "rest" or hiding-reason = "both" [
+    let rest-multiplier 1
+    if in-intact-shelter [
+      set rest-multiplier 2  ; Better rest in intact shelters
+    ]
+
+    ; Reduce fatigue while resting
+    set fatigue-level max (list (fatigue-level - (2 * rest-multiplier)) 0)
+
+    ; Small energy recovery from rest, but much less than from food
+    set energy min (list (energy + (0.5 * rest-multiplier)) 100)
+
+    ; Reduce stress while resting (more in safe shelters)
+    set stress-level max (list (stress-level - (2 * rest-multiplier)) 0)
   ]
 
-  ; OPTION C: Even while resting, allow resource hoarding conflicts if critically desperate
+  ; SAFETY BENEFITS (much better in intact shelters)
+  if hiding-reason = "safety" or hiding-reason = "both" [
+    let safety-multiplier 1
+    if in-intact-shelter [
+      set safety-multiplier 3  ; Much better stress reduction in intact shelters
+    ]
+
+    ; Reduce stress from hiding from danger
+    set stress-level max (list (stress-level - (3 * safety-multiplier)) 0)
+  ]
+
+  ; Resource competition logic (existing code remains the same)
   if hunger-level > 95 and any? resources in-radius vision-range [
     let nearby-humans other humans in-radius vision-range
-    if any? nearby-humans and random 100 < 15 [  ; 15% chance when desperately hungry
-      set state "wandering"  ; Break from hiding to compete for resources
+    if any? nearby-humans and random 100 < 15 [
+      set state "wandering"
       set hiding-reason "none"
       set rest-timer 0
       initiate-intragroup-conflict nearby-humans
@@ -797,39 +1169,47 @@ to hide-rest-behavior
   let visible-zombies zombies in-radius vision-range
   let should-stop-hiding false
 
-  ; Stop hiding from safety when no longer threatened
-  if hiding-reason = "safety" and not any? visible-zombies [
-    if random 100 < 70 [  ; 70% chance per tick to stop hiding from safety
-      set should-stop-hiding true
+  ; Modified stop conditions considering shelter safety
+  if hiding-reason = "safety" [
+    ; In intact shelter: only leave if no zombies AND well rested
+    ifelse in-intact-shelter [
+      if not any? visible-zombies and not any? zombies with [state = "breaking-in" and target-shelter = [patch-here] of myself] [
+        if random 100 < 30 [  ; Lower chance to leave safe shelter
+          set should-stop-hiding true
+        ]
+      ]
+    ]
+    ; Not in intact shelter: leave when no immediate zombies
+    [
+      if not any? visible-zombies [
+        if random 100 < 70 [
+          set should-stop-hiding true
+        ]
+      ]
     ]
   ]
 
-  ; Stop resting when well-rested OR urgent needs
+  ; Rest stopping conditions (existing logic)
   if hiding-reason = "rest" [
-    ; Stop if well-rested
     if fatigue-level < 20 and energy > 60 [
       set should-stop-hiding true
     ]
-    ; Stop if urgent zombie threat
     if any? visible-zombies [
-      set hiding-reason "safety"  ; Switch to hiding for safety
+      set hiding-reason "safety"
       set should-stop-hiding false
     ]
-    ; Stop if desperately hungry and resources available
     if hunger-level > 90 and any? resources in-radius vision-range [
       set should-stop-hiding true
     ]
   ]
 
-  ; Handle "both" case
+  ; "Both" case handling (existing logic)
   if hiding-reason = "both" [
-    ; Only stop when both conditions are met: safe and rested
     if not any? visible-zombies and fatigue-level < 20 and energy > 60 [
-      if random 100 < 50 [  ; 50% chance to stop when both conditions met
+      if random 100 < (ifelse-value in-intact-shelter [30] [50]) [
         set should-stop-hiding true
       ]
     ]
-    ; Or if desperately hungry
     if hunger-level > 90 and any? resources in-radius vision-range [
       set should-stop-hiding true
     ]
@@ -842,8 +1222,9 @@ to hide-rest-behavior
     set rest-timer 0
   ]
 
-  ; Force wake up if hiding too long (avoid getting stuck)
-  if rest-timer > 50 [  ; After 50 ticks of hiding
+  ; Force wake up if hiding too long (but longer in safe shelters)
+  let max-hide-time (ifelse-value in-intact-shelter [100] [50])
+  if rest-timer > max-hide-time [
     set state "wandering"
     set hiding-reason "none"
     set rest-timer 0
@@ -954,46 +1335,71 @@ end
 
 ; ----- HELPER FUNCTIONS ----
 
-; Handle infection progression
+; MODIFIED: Handle infection progression with guaranteed transformation
 to handle-infection
-  set color violet
+  set color 122
 
   ; Infection timer counts down
-  set infection-timer max (list( infection-timer - 1) 0)
+  set infection-timer max (list (infection-timer - 1) 0)
 
   ; Infection drains energy and increases fatigue
   set energy max (list (energy - 2) 0)
-  set fatigue-level min (list (fatigue-level + 1) 100)  ; NEW: Infection is exhausting
+  set fatigue-level min (list (fatigue-level + 1) 100)
 
   ; Infected humans move erratically but slowly
   rt random 90 - random 90
   fd speed * 0.3
 
-  ; When timer reaches 0, turn into zombie
-  if infection-timer <= 0 [
+  ; FIXED: When timer reaches 0 OR energy reaches 0, transform to zombie
+  if infection-timer <= 0 or energy <= 0 [
     transform-to-zombie
   ]
 end
 
+; FIXED: Transform to zombie procedure
 to transform-to-zombie
-  ; Create new zombie at location
+  ; Store current position
+  let current-patch patch-here
+
+  ; Create new zombie at same location
   hatch-zombies 1 [
     set shape "person"
     set color red
     set size 1.5
-    move-to one-of patches with [not any? turtles-here]
 
-    ; Initialize zombie properties
-    set health 75 + random 25          ; Initial health of zombie
-    set speed 0.3 + random-float 0.3   ; Zombies are slower than humans
-    set strength 8 + random 4          ; But stronger
+    ; Stay at the same location where human died
+    move-to current-patch
+
+    ; Initialize zombie properties with some inheritance from human
+    set health 60 + random 30          ; Newly turned zombies are weaker
+    set speed 0.2 + random-float 0.3   ; Slower than humans, even slower when newly turned
+    set strength 6 + random 4          ; Moderate strength
     set state "wandering"
-    set vision-range 3 + random 2      ; Poor vision
-    set hearing-range 6 + random 4     ; Good hearing
-    set satiation 0                    ; Start hungry
+    set vision-range 2 + random 2      ; Poor vision initially
+    set hearing-range 5 + random 3     ; Good hearing
+    set satiation 20                   ; Start with some satiation from transformation
+
+    ; Initialize horde behavior properties
+    set target-human nobody
+    set horde-leader? false
+    set following-zombie nobody
+    set chase-timer 0
+
+    ; Initialize decay properties
+    set age-ticks 0
+    set decay-rate 0.005 + random-float 0.015  ; Newly turned decay slower initially
+    set max-lifespan 30000 + random 15000      ; 3-5 years variation
+
+    ; NEW: Initialize shelter breaking properties
+    set target-shelter nobody
+    set break-progress 0
   ]
 
-  ; Remove human
+  ; Update global counters
+  set total-infections total-infections + 1
+  set total-survivors total-survivors - 1
+
+  ; Remove original human
   die
 end
 
@@ -1050,7 +1456,7 @@ initial-human-population
 initial-human-population
 2
 10
-8.0
+10.0
 1
 1
 NIL
@@ -1065,7 +1471,7 @@ initial-zombie-population
 initial-zombie-population
 0
 30
-13.0
+4.0
 1
 1
 NIL
@@ -1080,7 +1486,7 @@ initial-resource-count
 initial-resource-count
 0
 100
-19.0
+15.0
 1
 1
 NIL
@@ -1121,10 +1527,10 @@ NIL
 1
 
 PLOT
-735
-48
-935
-198
+718
+47
+918
+197
 Average Hunger Level
 Time (ticks)
 Average Hunger Level
@@ -1138,40 +1544,18 @@ false
 PENS
 "hunger" 1.0 0 -16777216 true "" ""
 
-MONITOR
-731
-212
-790
-257
-Humans
-count humans
-17
-1
-11
-
-MONITOR
-796
-212
-856
-257
-zombies
-count zombies
-17
-1
-11
-
 PLOT
-947
-48
-1147
-198
+930
+47
+1130
+197
 Total Conflicts Over Time
 Ticks
 Conflicts
 0.0
 10.0
 0.0
-1.0
+5.0
 true
 false
 "" ""
@@ -1179,14 +1563,50 @@ PENS
 "total-conflicts" 1.0 0 -2674135 true "" ""
 
 TEXTBOX
-730
-275
-931
-443
-Pink: Neutral state\nBrown: Competing for resources\nMagenta: Cooperating with others\nBlue: Hostile toward group members\nRed: In active conflict (larger size too)\nYellow: Running from zombies\nWhite: Fighting zombies
+43
+256
+244
+438
+Pink: Neutral state\nBrown: Competing for resources\nMagenta: Cooperating with others\nBlue: Hostile toward group members\nRed: In active conflict (larger size too)\nYellow: Running from zombies\nBlue: Safe in intact shelter \nOrange: hiding unsafely \nTurquoise: resting safely \nCyan: resting unsafely \nMagenta: both, safely \nDarker Yellow: both, unsafely \nWhite: Fighting zombies
 11
 0.0
 1
+
+PLOT
+929
+211
+1129
+361
+Human Population
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -13840069 true "" "plot count humans"
+
+PLOT
+716
+209
+916
+359
+Zombie Population
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -2674135 true "" "plot count zombies"
 
 @#$#@#$#@
 ## WHAT IS IT?
