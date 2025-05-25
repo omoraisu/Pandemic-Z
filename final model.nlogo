@@ -15,6 +15,8 @@ globals [
   total-conflicts    ; count of times when stress level across humans is high
   zombie-kill-count  ; zombies killed by humans
   resource-scarcity  ; global metric of resource availability (0-100)
+
+  ; Self-organization metrics
 ]
 
 ; ----- AGENT PROPERTIES -----
