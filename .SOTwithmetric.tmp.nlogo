@@ -257,8 +257,8 @@ end
 
 ; Dynamic decision-making based on local conditions
 to choose-action
-  let nearby-zombies zombies in-radius vision-range
-  let nearby-resources resources in-radius vision-range
+  let nearby-zombies zombies in-radius
+  let nearby-resources resources in-radius 3
 
   ; Decision logic based on environmental pressures
   ifelse stress-level > 15 and any? nearby-zombies [
