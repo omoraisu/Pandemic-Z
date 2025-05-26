@@ -1504,7 +1504,7 @@ to combat-nearby-zombies
     ask target [
       set health health - combat-effectiveness
     ]
-    set energy energy - 2  ; Combat costs energy
+    set energy energy -   ; Combat costs energy
   ]
 end
 
@@ -1524,7 +1524,7 @@ to help-nearby-humans
       set energy energy + 10
       set stress-level max list 0 (stress-level - 5)
     ]
-    set energy energy - 1  ; Helping costs energy
+    set energy energy - 3  ; Helping costs energy
   ]
 end
 
