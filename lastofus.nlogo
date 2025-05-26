@@ -40,7 +40,6 @@ humans-own [
 
   ; Zombiefication
   infection-timer
-
 ]
 
 zombies-own [
@@ -183,7 +182,7 @@ to setup-humans
     set skill-gathering 10 + random 20
 
     ; Role
-    set role "generalist"
+    specialize-role
     set last-action "none"
     set combat-actions 0
     set gathering-actions 0
@@ -249,106 +248,218 @@ to go
   ]
 
   ; Respawn resources less frequently
-  if ticks mod 150 = 0 [  ; Every 10 ticks
-    respawn-resources
-  ]
+  ; if ticks mod 150 = 0 [  ; Every 10 ticks
+  ;  respawn-resources
+  ; ]
 
   ask humans [human-behavior]
 
 end
 
 to human-behavior
+  update-energy-level
+  death-check
+  ; Only if there is enough energy, otherwise, run-hide or find resources
+  perform-action
 
-  ; Basic metabolism
+  if resource-inventory < 30 [
+    ask-for-resources
+  ]
+
+  ; update-human-color
+  ; add some sort of infection check?
+  wander
+end
+
+; Update based on last action
+to update-energy-level
   set energy energy - 0.1
+end
 
-  ; Death check (from no energy)
+to death-check
   if energy <= 0 [
     set state "corpse"
     set color gray
-    stop
-  ]
-
-  ; Skip if dead
-  if state = "corpse" [update-corpse-state stop]
-
-  ; State-based behavior
-  (ifelse
-    state = "wandering" [wander-behavior]
-    ; state = "running" [run-behavior]
-    ; state = "hiding" [hide-rest-behavior]
-    ; state = "fighting" [fight-behavior]
-  )
-
-end
-
-; ----- STATE-SPECIFIC BEHAVIORS -----
-
-to wander-behavior
-  rt random 50 - random 50
-  fd speed * 0.5
-end
-
-; Running state - fleeing from zombies
-to run-behavior
-  let visible-zombies zombies in-radius vision-range
-
-  ifelse any? visible-zombies [
-    let nearest-zombie min-one-of visible-zombies [distance myself]
-
-    if nearest-zombie != nobody [
-      face nearest-zombie
-      rt 180        ; Turn away
-      fd speed * 1.3  ; Move away quickly
-
-      ; Running uses more energy and raises stress
-      set energy energy - 1
-      set stress-level min (list (stress-level + 3) 100)
-
-
-      ; Try to find hiding patches
-      let hiding-patch one-of patches in-radius 2 with [pcolor = black or pcolor = gray]
-      if hiding-patch != nobody [
-        move-to hiding-patch
-        set state "hiding"
-      ]
-    ]
-  ] [
-    ; No zombies in sight — calm down
-    set state "wandering"
-    set stress-level max (list (stress-level - 5) 0)
-
-  ]
-end
-
-
-; Add missing procedure for corpse handling
-to update-corpse-state
-  ; Corpses just stay in place and decay
-  set color gray
-  set size size * 0.99  ; Slowly shrink
-
-  ; Remove corpse after some time
-  if size < 0.1 [
     die
   ]
 end
 
-; Respawn resources in the same areas after they're consumed
-to respawn-resources
-  ask patches with [pcolor >= green and pcolor <= lime and not any? resources-here] [
-    ; Chance to respawn based on resource-level and resource-scarcity
-    let respawn-chance (resource-level / 50) * (100 - resource-scarcity) / 100 * 15
-    if random-float 100 < respawn-chance [
-      sprout 1 [
-        set breed resources
-        set color yellow
-        set shape "circle"
-        set size 0.8
+to specialize-role
+  ifelse (skill-combat > skill-gathering) [
+    set role "defender"
+    set color blue
+  ][
+    set role "gatherer"
+    set color pink
+  ]
+end
+
+; Allow humans to switch roles based on skill, needs, and environment
+; NOTE: When does it evolve?
+to adapt-role
+  if (role = "gatherer" and skill-combat > skill-gathering + 1) [ set role "defender"]
+  if (role = "defender" and skill-gathering > skill-combat + 1) [ set role "gatherer" ]
+end
+
+to perform-action
+  if any? zombies in-radius vision-range [
+    if role = "defender" [
+      attack-zombie
+    ]
+  ]
+
+ if role = "gatherer" [
+   gather-resources
+ ]
+end
+
+to attack-zombie
+  let visible-zombies zombies in-radius vision-range
+
+  if any? visible-zombies [
+    let target min-one-of visible-zombies [distance myself]
+    face target
+
+    ifelse distance target > 1 [
+      fd speed * 1.3  ; Move closer if not yet in range
+    ] [
+      ; Attack only if probability check succeeds
+      ; NOTE: And if there is enough energy
+      ifelse random-float 40 < skill-combat [
+        ask target [
+          set health health - [strength] of myself
+          if health <= 0 [
+            die
+          ]
+        ]
+        set last-action "attack"
+      ] [
+        ; run-hide
       ]
     ]
   ]
 end
+
+; Gather resource when the area is safe and if you don't have maximum resource invetory (100) yet
+; Otherwise, run-hide
+to gather-resources
+  let nearby-resources resources in-radius vision-range
+  if any? nearby-resources [
+    ; Check safety condition
+    let zombies-nearby zombies in-radius vision-range
+    let defenders-nearby humans with [role = "defender"] in-radius vision-range
+
+    ifelse any? zombies-nearby and not any? defenders-nearby [
+      let target-resource one-of nearby-resources
+      face target-resource
+
+      ; Move forward toward resource but only if not already close
+      ifelse distance target-resource > 1 [
+        fd speed
+      ] [
+        ; Close enough to gather
+        let resource-amount [amount] of target-resource
+        let space-left 100 - resource-inventory
+
+        if space-left > 0 [
+          let gathered-amount min (list resource-amount space-left)
+          set resource-inventory resource-inventory + gathered-amount
+
+          ask target-resource [ die ]
+          set last-action "gather"
+        ]
+      ]
+    ][
+      ; run-hide
+    ]
+  ]
+end
+
+to ask-for-resources
+  if trust-level > 71 [
+    let potential-donors other humans in-radius 2 with [resource-inventory > 30]
+
+    if any? potential-donors [
+      let donor one-of potential-donors
+      ask donor [
+        give-resources-to myself
+      ]
+      set last-action "ask"
+      stop
+    ]
+  ]
+end
+
+
+to give-resources-to [recipient]
+  if trust-level > 71 and cooperation-level > 71 [
+    let spare resource-inventory - 30
+    if spare > 0 [
+      let needed 100 - [resource-inventory] of recipient
+      let max-give min (list spare needed)
+      let to-give random (max-give + 1)
+
+      if to-give > 0 [
+        set resource-inventory resource-inventory - to-give
+        ask recipient [
+          set resource-inventory resource-inventory + to-give
+          set last-action "receive"
+        ]
+        set last-action "share"
+        stop
+      ]
+    ]
+  ]
+end
+
+to wander
+  ; Simple random walk
+  rt random 50 - random 50
+  fd speed * 0.5
+  set last-action "wander"
+end
+
+to run-away
+  let nearest-zombie min-one-of zombies [distance myself]
+
+  if nearest-zombie != nobody [
+    face nearest-zombie
+    rt 180                ; Turn and run opposite direction
+    fd speed * 1.3        ; Move faster than usual
+    set last-action "run"
+    stop
+  ]
+end
+
+to hide
+  let shelters patches in-radius 2 with [pcolor = orange or is-shelter]
+
+  if any? shelters [
+    move-to one-of shelters
+    set last-action "hide"
+    stop
+  ]
+end
+
+to update-human-color
+  if last-action = "attack" [
+    set color blue
+  ]
+  if last-action = "run" [
+    set color yellow
+  ]
+  if last-action = "hide" [
+    set color gray
+  ]
+  if last-action = "wander" [
+    set color white
+  ]
+  if last-action = "gather" [
+    set color pink
+  ]
+end
+
+
 
 
 @#$#@#$#@
@@ -373,8 +484,8 @@ GRAPHICS-WINDOW
 25
 -20
 20
-0
-0
+1
+1
 1
 ticks
 30.0
@@ -433,7 +544,7 @@ BUTTON
 133
 NIL
 go
-T
+NIL
 1
 T
 OBSERVER
