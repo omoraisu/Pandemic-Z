@@ -104,7 +104,6 @@ patches-own [
   is-shelter         ; boolean if patch is shelter
   shelter-quality    ; how good the shelter is (0-100)
   zombie-scent       ; for zombie tracking of humans
-  human-scent        ; for zombies to detect humans
   last-visited       ; when patch was last visited by any agent
   conflict-zone?     ; whether this area has seen recent conflicts
 
@@ -121,7 +120,6 @@ to setup
   setup-environment
   setup-humans
   setup-zombies
-  setup-resources
   initialize-rct-variables
   setup-plots
   reset-ticks
@@ -145,48 +143,75 @@ end
 
 ; Create the environment with varied terrain
 to setup-environment
-  ; Create landscape with various resource levels
+  clear-all
+
+  ; Initialize all patches with base properties first
   ask patches [
-    set resource-level random-float 20  ; Initial resources are sparse
+    set resource-level 0
     set is-shelter false
     set zombie-scent 0
-    set human-scent 0
     set last-visited 0
     set conflict-zone? false
 
-    ; NEW: Initialize shelter properties
+    ; Initialize shelter properties for all patches
     set shelter-integrity 100
     set being-broken? false
     set break-timer 0
     set max-break-time 0
+  ]
 
-    ; Random terrain coloring based on resource levels
-    set pcolor scale-color green resource-level 0 100
+  ; Load the urban map from file
+  file-open "map.txt"
+  let y max-pycor
 
-    ; Add hiding spots with 10% chance
-    if random-float 1 < 0.001 [
-      set pcolor one-of [black gray]
+  while [not file-at-end?] [
+    let row file-read-line
+    let x min-pxcor
+    let i 0
+
+    ; Process each character in the row without explode function
+    while [i < length row] [
+      let char substring row i (i + 1)
+      ask patch x y [
+        if char = "W" [
+          set pcolor black                           ; Roads
+          set resource-level random-float 5         ; Low resources on roads
+        ]
+        if char = "G" [
+          set resource-level 15 + random-float 25   ; High resources (15-40)
+          set pcolor scale-color lime resource-level 0 50
+        ]
+        if char = "O" [
+          ; Initialize shelters with full properties
+          set is-shelter true
+          set shelter-quality 50 + random 50       ; Varied shelter quality (50-100)
+          set pcolor orange
+          set resource-level random-float 5         ; Limited resources in shelters
+
+          ; Set shelter breaking properties based on quality
+          set shelter-integrity 100
+          set max-break-time (shelter-quality / 2) + 30  ; 75-100 ticks to break in
+          set being-broken? false
+          set break-timer 0
+        ]
+      ]
+      set x x + 1
+      set i i + 1
     ]
+    set y y - 1
   ]
 
-  ; Create some shelters randomly throughout the map
-  let shelter-count (count patches) * 0.01  ; 0.5% of patches are shelters
-  ask n-of shelter-count patches [
-    set is-shelter true
-    set shelter-quality 50 + random 50  ; Varied shelter quality
-    set pcolor brown
+  file-close
 
-    ; NEW: Set shelter breaking properties based on quality
-    set shelter-integrity 100
-    set max-break-time (shelter-quality / 2) + 30  ; 55-80 ticks to break in
-    set being-broken? false
-    set break-timer 0
-  ]
+  ; Initialize resources in resource areas
+  spawn-resources
 
-  ; Set initial values
+  ; Set initial game values
   set day 1
   set day-phase 0  ; Start with daytime
   set resource-scarcity 50  ; Medium scarcity to start
+
+  reset-ticks
 end
 
 ; Setup initial human population
@@ -283,18 +308,35 @@ to setup-zombies
   ]
 end
 
-; Create initial resource patches
-to setup-resources
-  ; Distribute resources (food, water, medical supplies)
-  create-resources initial-resource-count [
-    set shape "box"
-    set color yellow
-    set size 1
+; Spawn resources only in designated resource areas (green patches)
+to spawn-resources
+  ask patches with [pcolor >= green and pcolor <= lime] [
+    ; Each resource patch has a chance to contain a resource based on resource-level
+    let spawn-chance (resource-level / 40) * 70  ; Higher resource-level = higher spawn chance
+    if random-float 100 < spawn-chance [
+      sprout 1 [
+        set breed resources
+        set color yellow
+        set shape "circle"
+        set size 0.8
+      ]
+    ]
+  ]
+end
 
-    ; Set amount value
-    set amount 10 + random 20
-
-    move-to one-of patches with [not any? turtles-here]
+; Respawn resources in the same areas after they're consumed
+to respawn-resources
+  ask patches with [pcolor >= green and pcolor <= lime and not any? resources-here] [
+    ; Chance to respawn based on resource-level and resource-scarcity
+    let respawn-chance (resource-level / 50) * (100 - resource-scarcity) / 100 * 15
+    if random-float 100 < respawn-chance [
+      sprout 1 [
+        set breed resources
+        set color yellow
+        set shape "circle"
+        set size 0.8
+      ]
+    ]
   ]
 end
 
@@ -315,7 +357,15 @@ to go
     set day day + 1
   ]
 
+<<<<<<< HEAD
   ; update-resources
+=======
+  ; Respawn resources less frequently
+  if ticks mod 10 = 0 [  ; Every 10 ticks
+    respawn-resources
+  ]
+
+>>>>>>> environment
   ; Update RCT dynamicsq
   update-resource-pressure
   update-group-dynamics
@@ -1626,13 +1676,13 @@ to-report gatherer-ratio
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
-257
-13
-694
-451
+256
+10
+812
+459
 -1
 -1
-13.0
+10.78
 1
 10
 1
@@ -1642,10 +1692,10 @@ GRAPHICS-WINDOW
 1
 1
 1
--16
-16
--16
-16
+-25
+25
+-20
+20
 0
 0
 1
@@ -1732,10 +1782,10 @@ NIL
 1
 
 PLOT
-718
-47
-918
-197
+1031
+10
+1231
+160
 Average Hunger Level
 Time (ticks)
 Average Hunger Level
@@ -1750,10 +1800,10 @@ PENS
 "hunger" 1.0 0 -16777216 true "" ""
 
 PLOT
-930
-47
-1130
-197
+1031
+166
+1231
+316
 Total Conflicts Over Time
 Ticks
 Conflicts
@@ -1768,20 +1818,20 @@ PENS
 "total-conflicts" 1.0 0 -2674135 true "" ""
 
 TEXTBOX
-43
-256
-244
-438
+34
+249
+231
+459
 Pink: Neutral state\nBrown: Competing for resources\nMagenta: Cooperating with others\nBlue: Hostile toward group members\nRed: In active conflict (larger size too)\nYellow: Running from zombies\nBlue: Safe in intact shelter \nOrange: hiding unsafely \nTurquoise: resting safely \nCyan: resting unsafely \nMagenta: both, safely \nDarker Yellow: both, unsafely \nWhite: Fighting zombies
 11
 0.0
 1
 
 PLOT
-929
-211
-1129
-361
+822
+166
+1022
+316
 Human Population
 NIL
 NIL
@@ -1796,10 +1846,10 @@ PENS
 "default" 1.0 0 -13840069 true "" "plot count humans"
 
 PLOT
-716
-209
-916
-359
+822
+10
+1022
+160
 Zombie Population
 NIL
 NIL
@@ -1814,10 +1864,17 @@ PENS
 "default" 1.0 0 -2674135 true "" "plot count zombies"
 
 PLOT
+<<<<<<< HEAD
 1136
 47
 1336
 197
+=======
+1238
+10
+1438
+160
+>>>>>>> environment
 Defender Ratio
 NIL
 NIL
@@ -1832,10 +1889,17 @@ PENS
 "default" 1.0 0 -16777216 true "" "plot defender-ratio"
 
 PLOT
+<<<<<<< HEAD
 1137
 210
 1337
 360
+=======
+1239
+166
+1439
+316
+>>>>>>> environment
 Gatherer Ratio
 NIL
 NIL
