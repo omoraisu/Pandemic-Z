@@ -257,23 +257,100 @@ to go
 end
 
 to human-behavior
+  ; 1. Metabolism & health checks first
   update-energy-level
   death-check
-  ; Only if there is enough energy, otherwise, run-hide or find resources
-  perform-action
 
+  ; 2. Update stress early, since stress affects behavior
+  update-stress
+
+  ; 3. If stress is very high, prioritize hiding and recovering stress
+  if stress-level > 80 [
+    hide-and-recover
+    stop  ;; do nothing else this tick
+  ]
+
+  ; 4. If energy is sufficient, do main tasks
+  if energy > 20 [
+    perform-task
+    cooperate-with-others
+  ]
+
+  ; 5. If resources are low, ask for resources (might involve cooperation)
   if resource-inventory < 30 [
     ask-for-resources
   ]
 
-  ; update-human-color
-  ; add some sort of infection check?
+  ; 6. Consume resources last, after tasks and cooperation
+  consume-resources
+
+  ; 7. Update trust and cooperation levels based on last actions
+  update-trust-cooperation
+
+  ; 8. Movement or wandering as fallback or end-of-turn activity
   wander
 end
 
-; Update based on last action
+
 to update-energy-level
-  set energy energy - 0.1
+  ;; Default passive drain
+  let drain 0.1
+
+  ;; Adjust based on last action
+  if last-action = "wander"         [ set drain 0.1 ]
+  if last-action = "run"            [ set drain 1.0 ]
+  if last-action = "hide"           [ set drain 0.1 ]
+  if last-action = "defend"         [ set drain 1.2 ]
+  if last-action = "attack"         [ set drain 1.2 ]
+
+  ;; Apply the drain, but never go below 1
+  set energy max (list 1 (energy - drain))
+end
+
+to update-trust-cooperation
+  ; Base constant increase each tick (small)
+  set trust-level min (list 100 (trust-level + 0.05))
+  set cooperation-level min (list 100 (cooperation-level + 0.05))
+
+  ; Positive actions
+  if last-action = "share" [
+    set trust-level min (list 100 (trust-level + 5))
+    set cooperation-level min (list 100 (cooperation-level + 5))
+  ]
+
+  if last-action = "receive" [
+    set trust-level min (list 100 (trust-level + 3))
+    set cooperation-level min (list 100 (cooperation-level + 3))
+  ]
+
+  if last-action = "defend" [
+    set trust-level min (list 100 (trust-level + 4))
+    set cooperation-level min (list 100 (cooperation-level + 4))
+  ]
+
+  if last-action = "dismissive" [
+    set trust-level max (list 0 (trust-level - 5))
+    set cooperation-level max (list 0 (cooperation-level - 5))
+  ]
+
+  ;; Reset to prevent repeated adjustments
+  set last-action "none"
+end
+
+to update-stress
+  set stress-level min (list 100 (stress-level + 0.1))
+
+  let zombies-nearby count zombies in-radius vision-range
+  let on-shelter? (pcolor = orange or is-shelter)
+
+  if zombies-nearby > 0 [
+    ;; Increase stress if zombies nearby
+    set stress-level min (list 100 (stress-level + 2 * zombies-nearby))
+  ]
+  if on-shelter? [
+    ;; Decrease stress gradually if on shelter
+    set stress-level max (list 0 (stress-level - 5))
+  ]
 end
 
 to death-check
@@ -301,7 +378,7 @@ to adapt-role
   if (role = "defender" and skill-gathering > skill-combat + 1) [ set role "gatherer" ]
 end
 
-to perform-action
+to perform-task
   if any? zombies in-radius vision-range [
     if role = "defender" [
       attack-zombie
@@ -317,25 +394,16 @@ to attack-zombie
   let visible-zombies zombies in-radius vision-range
 
   if any? visible-zombies [
-    let target min-one-of visible-zombies [distance myself]
-    face target
+    let target-zombie min-one-of visible-zombies [distance myself]
+    face target-zombie
 
-    ifelse distance target > 1 [
-      fd speed * 1.3  ; Move closer if not yet in range
+    ifelse distance target-zombie > 1 [
+      fd speed * 1.2  ; Move closer if not yet in range
     ] [
       ; Attack only if probability check succeeds
       ; NOTE: And if there is enough energy
-      ifelse random-float 40 < skill-combat [
-        ask target [
-          set health health - [strength] of myself
-          if health <= 0 [
-            die
-          ]
-        ]
-        set last-action "attack"
-      ] [
-        ; run-hide
-      ]
+      perform-attack target-zombie
+      set last-action "attack"
     ]
   ]
 end
@@ -375,6 +443,17 @@ to gather-resources
   ]
 end
 
+; Consume resources when energy is low
+to consume-resources
+  if energy < 30 and resource-inventory >= 10 [
+    set resource-inventory resource-inventory - 10
+    set energy energy + 10  ; assume 10 units restore 20 energy
+    if energy > 100 [ set energy 100 ] ; cap energy at 100
+    set last-action "consume"
+  ]
+end
+
+; Ask for resources if trust level is high
 to ask-for-resources
   if trust-level > 71 [
     let potential-donors other humans in-radius 2 with [resource-inventory > 30]
@@ -412,6 +491,60 @@ to give-resources-to [recipient]
   ]
 end
 
+
+to cooperate-with-others
+  if trust-level > 71 and cooperation-level > 71 [
+
+    ;; ===== RESOURCE SHARING =====
+    let nearby-humans other humans in-radius 2 with [resource-inventory < 30]
+    if any? nearby-humans [
+      let needy one-of nearby-humans
+
+      ;; Random chance to help vs ignore
+      ifelse random-float 100 < 85 [ ; 85% chance to help
+        give-resources-to needy
+        stop
+      ] [
+        set last-action "dismissive"
+        ;; optionally print or log it
+        stop
+      ]
+    ]
+
+    ;; ===== DEFEND OTHERS =====
+    if skill-combat > skill-gathering [
+      let zombies-nearby zombies in-radius vision-range
+      let humans-nearby other humans in-radius vision-range
+      let endangered one-of humans-nearby with [
+        any? zombies in-radius 1
+      ]
+
+      if endangered != nobody and any? zombies-nearby [
+        ;; Random chance to defend
+        if random-float 100 < 80 [ ; 80% chance to defend
+          let target-zombie min-one-of zombies-nearby [distance endangered]
+          face target-zombie
+
+          if distance target-zombie > 1 [
+            fd speed * 1.2
+          ]
+          ifelse random-float 100 < 80 [
+            perform-attack target-zombie
+            set last-action "defend"
+            stop
+          ] [
+            set last-action "dismissive"
+            stop
+            ]
+        ]
+      ]
+    ]
+  ]
+end
+
+
+
+; MOVEMENT
 to wander
   ; Simple random walk
   rt random 50 - random 50
@@ -431,42 +564,59 @@ to run-away
   ]
 end
 
-to hide
-  let shelters patches in-radius 2 with [pcolor = orange or is-shelter]
+to hide-and-recover
+  let shelter-radius 2
+  let current-patch patch-here
 
-  if any? shelters [
-    move-to one-of shelters
-    set last-action "hide"
-    stop
+  ;; Check if already at a shelter patch
+  ifelse pcolor = orange or is-shelter [
+    ;; Reduce stress gradually while staying sheltered
+    set stress-level max (list 0 (stress-level - 5))
+
+    ;; If stress is low enough, wander again
+    ifelse stress-level <= 20 [
+      set last-action "recovered"
+      wander
+      stop
+    ] [
+      set last-action "recovering"
+      ;; Stay put, do nothing else this tick
+      stop
+    ]
+  ]
+  ;; Otherwise try to move to a shelter nearby
+   [
+    let shelters patches in-radius shelter-radius with [pcolor = orange or is-shelter]
+    ifelse any? shelters [
+      move-to one-of shelters
+      set last-action "hide"
+      stop
+    ] [
+      ;; No shelter found, wander or run away (depends on context)
+      wander
+      stop
+    ]
   ]
 end
 
-to update-human-color
-  if last-action = "attack" [
-    set color blue
-  ]
-  if last-action = "run" [
-    set color yellow
-  ]
-  if last-action = "hide" [
-    set color gray
-  ]
-  if last-action = "wander" [
-    set color white
-  ]
-  if last-action = "gather" [
-    set color pink
+to perform-attack [target]
+  if random-float 40 < skill-combat [
+    ask target [
+      set health health - [strength] of myself
+      if health <= 0 [ die ]
+    ]
   ]
 end
+
 
 
 
 
 @#$#@#$#@
 GRAPHICS-WINDOW
-210
+211
 10
-881
+882
 552
 -1
 -1
