@@ -179,14 +179,14 @@ to setup-humans
   create-humans initial-human-population [
     set shape "person"
     set color white
-    set size 1.5
+    set size 2
     move-to one-of patches with [pcolor = orange and not any? humans-here]
 
     ; Initialize properties
     ; Physical
     set energy 75 + random 25
     set speed 0.5 + random-float 0.5
-    set strength  3 + random 7
+    set strength  7 + random 3
     set state "wandering"
     set vision-range 3 + random 2
 
@@ -199,7 +199,7 @@ to setup-humans
     set cooperation-level 30 + random 70
 
     ; Skills - START WITH NEUTRAL VALUES
-    set skill-combat 15 + random 10    ; 15-25 range
+    set skill-combat 20 + random 10    ; 15-25 range
     set skill-gathering 15 + random 10 ; 15-25 range
 
     ; Role - START AS GENERALIST (will quickly adapt to fighter or gatherer)
@@ -218,12 +218,12 @@ to setup-humans
     set defense-attempt-count 0
 
     ; NEW: Initialize experience
-    set combat-experience 0
-    set gathering-experience 0
+    set combat-experience 5
+    set gathering-experience 5
 
     ; NEW: Initialize role adaptation
     set role-confidence 50  ; neutral confidence
-    set role-change-cooldown 50  ; ticks before can change role again
+    set role-change-cooldown 20  ; ticks before can change role again
     set last-role-change-tick 0
 
     ; NEW: Initialize performance averages
@@ -239,17 +239,14 @@ to setup-zombies
   create-zombies initial-zombie-population [
     set shape "person"
     set color red
-    set size 1.5
-    move-to one-of patches with [
-      pxcor > 0 and pycor < 0 and  ; Positive X, negative Y coordinates (lower right)
-      not any? turtles-here
-    ]
+    set size 2
+    move-to one-of patches with [not any? turtles-here]
 
-    set health 75 + random 25
-    set speed 0.2 + random-float 0.8
-    set strength 7 + random 3
+    set health 30 + random 20
+    set speed 0.2
+    set strength 3 + random 7
     set state "wandering"
-    set vision-range 2 + random 3
+    set vision-range 2 + random 2
     set hearing-range 3 + random 2
     set satiation 0
 
@@ -260,7 +257,7 @@ to setup-zombies
 
     set age-ticks 0
     set decay-rate 0.01 + random-float 0.04
-    set max-lifespan 1000 + random 3000
+    set max-lifespan 500 + random 500
   ]
 end
 
@@ -270,6 +267,22 @@ to setup-resources
     ; Each resource patch has a chance to contain a resource based on resource-level
     let spawn-chance (resource-level / 40) * 70  ; Higher resource-level = higher spawn chance
     if random-float 100 < spawn-chance [
+      sprout 1 [
+        set breed resources
+        set color yellow
+        set shape "circle"
+        set size 0.8
+        set amount 10 + random 20
+      ]
+    ]
+  ]
+end
+
+to respawn-resources
+  ask patches with [pcolor >= green and pcolor <= lime and not any? resources-here] [
+    ; Chance to respawn based on resource-level and resource-scarcity
+    let respawn-chance (resource-level / 50) * (100 - resource-scarcity) / 100 * 15
+    if random-float 100 < respawn-chance [
       sprout 1 [
         set breed resources
         set color yellow
@@ -300,6 +313,7 @@ to go
 
   ask zombies [zombie-behavior]
 
+  respawn-resources
   tick
 end
 
@@ -346,14 +360,14 @@ to update-role-adaptation
   ]
 
   ; Calculate performance metrics
-  let combat-success-rate 0
-  let gather-success-rate 0
+  let combat-success-rate 0.2
+  let gather-success-rate 0.2
 
-  if combat-attempt-count > 5 [
+  if combat-attempt-count > 3 [
     set combat-success-rate (combat-success-count / combat-attempt-count)
   ]
 
-  if gather-attempt-count > 5 [
+  if gather-attempt-count > 3 [
     set gather-success-rate (gather-success-count / gather-attempt-count)
   ]
 
@@ -367,7 +381,7 @@ to update-role-adaptation
 
   ; Role change logic with confidence thresholds
   let old-role role
-  let role-change-threshold 0.15  ; need significant difference to change
+  let role-change-threshold 0.20  ; need significant difference to change
 
   ; Determine new role - simplified to two roles
   let new-role role
@@ -456,6 +470,11 @@ to update-trust-cooperation
     set cooperation-level min (list 100 (cooperation-level + 4))
   ]
 
+  if last-action = "join-ally" [
+    set trust-level min (list 100 (trust-level + 5))
+    set cooperation-level min (list 100 (cooperation-level + 5))
+  ]
+
   if last-action = "dismissive" [
     set trust-level max (list 0 (trust-level - 6))
     set cooperation-level max (list 0 (cooperation-level - 6))
@@ -542,7 +561,7 @@ to attack-zombie
       ifelse random-float 40 < skill-combat [
         perform-attack target-zombie
         set combat-success-count combat-success-count + 1
-        set combat-experience min(list 100 (combat-experience + 1))
+        set combat-experience min(list 100 (combat-experience + 3))
         set last-action "attack"
       ] [
         ; Failed attack
@@ -581,7 +600,7 @@ to gather-resources
 
           ask target-resource [ die ]
           set gather-success-count gather-success-count + 1
-          set gathering-experience min(list 100 (gathering-experience + 1))
+          set gathering-experience min(list 100 (gathering-experience + 2))
           set last-action "gather"
         ]
       ]
@@ -668,14 +687,33 @@ to cooperate-with-others
 
       if endangered != nobody and any? zombies-nearby [
         ;; Random chance to defend
-        if random-float 100 < 85 [ ; 85% chance to defend
+        if random-float 100 < 85 [ ; 90% chance to defend
+                                   ;; Find a zombie near the endangered human
           let target-zombie min-one-of zombies-nearby [distance endangered]
-          face target-zombie
 
+          ;; Check if any other human fighter is near the zombie
+          let allies-near-zombie humans with [
+            role = "fighter" and self != myself and distance target-zombie <= 1.5
+          ]
+
+          ;; Move closer to ally first if there is one
+          if any? allies-near-zombie [
+            let chosen-ally one-of allies-near-zombie
+            face chosen-ally
+            if distance chosen-ally > 1 [
+              fd speed * 1.2
+              set last-action "join-ally"
+              stop
+            ]
+          ]
+
+          ;; Now proceed to attack the zombie
+          face target-zombie
           if distance target-zombie > 1 [
             fd speed * 1.3
           ]
-          ifelse random-float 100 < 80 [
+
+          ifelse random-float 100 < 90 [
             perform-attack target-zombie
             set defense-success-count defense-success-count + 1
             set defense-attempt-count defense-attempt-count + 1
@@ -685,7 +723,7 @@ to cooperate-with-others
             set defense-attempt-count defense-attempt-count + 1
             set last-action "dismissive"
             stop
-            ]
+          ]
         ]
       ]
     ]
@@ -748,12 +786,10 @@ to hide-and-recover
 end
 
 to perform-attack [target]
-  if random-float 40 < skill-combat [
-    ask target [
-      set health health - [strength] of myself
+  ask target [
+      set health health - ([strength] of myself * ([skill-combat] of myself / 100))
       if health <= 0 [ die ]
     ]
-  ]
 end
 
 ; --------ZOMBIE BEHAVIOR---------
@@ -898,9 +934,8 @@ to attack-human [target]
     ask target [
       ; Apply damage and stress
       set energy energy - [strength] of myself
-      set stress-level min (list (stress-level + 20) 100)
-      ; Infect if not already infected (50% chance)
-      if state != "infected" and random 100 < 50 [
+      ; Infect if not already infected (20% chance)
+      if state != "infected" and random 100 < 15 [
         set state "infected"
         set infection-timer 50 + random 50
         set color violet
@@ -921,6 +956,7 @@ to attack-human [target]
     set state "feeding"
   ]
 end
+
 to zombie-break-shelter
   ; Abort if no valid shelter
   if target-shelter = nobody or not [is-shelter] of target-shelter [
@@ -974,23 +1010,26 @@ to transform-to-zombie
   hatch-zombies 1 [
     set shape "person"
     set color red
-    set size 1.5
+    set size 2
     move-to current-patch
-    set health 75 + random 25
-    set speed 0.2 + random-float 0.8
-    set strength 7 + random 3
+
+    set health 30 + random 20
+    set speed 0.2 + random-float 0.3
+    set strength 3 + random 7
     set state "wandering"
-    set vision-range 2 + random 3
+    set vision-range 2 + random 2
     set hearing-range 3 + random 2
     set satiation 0
-    ; Initialize horde behavior properties
+
     set target-human nobody
     set horde-leader? false
     set following-zombie nobody
     set chase-timer 0
+
     set age-ticks 0
     set decay-rate 0.01 + random-float 0.04
-    set max-lifespan 1000 + random 3000
+    set max-lifespan 500 + random 500
+
     set target-shelter nobody
     set break-progress 0
   ]
@@ -1070,7 +1109,7 @@ initial-human-population
 initial-human-population
 0
 100
-15.0
+10.0
 1
 1
 NIL
@@ -1085,7 +1124,7 @@ initial-zombie-population
 initial-zombie-population
 0
 100
-17.0
+5.0
 1
 1
 NIL
