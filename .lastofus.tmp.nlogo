@@ -347,12 +347,9 @@ to update-stress
     ;; Increase stress if zombies nearby
     set stress-level min (list 100 (stress-level + 2 * zombies-nearby))
   ]
-  ifels on-shelter? [
+  if on-shelter? [
     ;; Decrease stress gradually if on shelter
     set stress-level max (list 0 (stress-level - 5))
-  ] [
-    ;; If no zombies nearby and not on shelter, decrease stress slowly
-    set stress-level max (list 0 (stress-level - 1))
   ]
 end
 
@@ -524,12 +521,12 @@ to cooperate-with-others
 
       if endangered != nobody and any? zombies-nearby [
         ;; Random chance to defend
-        if random-float 100 < 80 [ ; 80% chance to defend
+        if random-float 100 < 85 [ ; 85% chance to defend
           let target-zombie min-one-of zombies-nearby [distance endangered]
           face target-zombie
 
           if distance target-zombie > 1 [
-            fd speed * 1.2
+            fd speed * 1.3
           ]
           ifelse random-float 100 < 80 [
             perform-attack target-zombie
@@ -545,8 +542,6 @@ to cooperate-with-others
   ]
 end
 
-
-
 ; MOVEMENT
 to wander
   ; Simple random walk
@@ -561,7 +556,7 @@ to run-away
   if nearest-zombie != nobody [
     face nearest-zombie
     rt 180                ; Turn and run opposite direction
-    fd speed * 1.3        ; Move faster than usual
+    fd speed * 1.4        ; Move faster than usual
     set last-action "run"
     stop
   ]
@@ -610,6 +605,19 @@ to perform-attack [target]
     ]
   ]
 end
+
+to run-away
+  let nearest-zombie min-one-of zombies [distance myself]
+
+  if nearest-zombie != nobody [
+    face nearest-zombie
+    rt 180                ; Turn and run opposite direction
+    fd speed * 1.4        ; Move faster than usual
+    set last-action "run"
+    stop
+  ]
+end
+=
 
 
 
