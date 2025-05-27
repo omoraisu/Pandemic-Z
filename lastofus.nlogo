@@ -1,4 +1,4 @@
-; PANDEMIC Z
+; PANDEMIC Z - Dynamic Role Adaptation
 
 ; ----- BREEDS -----
 breed [humans human]
@@ -28,15 +28,36 @@ humans-own [
   trust-level
   cooperation-level
 
-  ; Skills
+  ; Skills (now dynamic)
   skill-combat
   skill-gathering
 
-  ; Role
+  ; Role (now adaptive - only fighter or gatherer)
   role
   last-action
   combat-actions
   gathering-actions
+
+  ; NEW: Performance tracking for dynamic adaptation
+  combat-success-count
+  combat-attempt-count
+  gather-success-count
+  gather-attempt-count
+  defense-success-count
+  defense-attempt-count
+
+  ; NEW: Experience-based learning
+  combat-experience
+  gathering-experience
+
+  ; NEW: Role confidence and adaptation
+  role-confidence
+  role-change-cooldown
+  last-role-change-tick
+
+  ; NEW: Performance history for better decision making
+  recent-combat-success    ; rolling average of recent combat success
+  recent-gather-success    ; rolling average of recent gathering success
 
   ; Zombiefication
   infection-timer
@@ -177,15 +198,37 @@ to setup-humans
     set trust-level 30 + random 70
     set cooperation-level 30 + random 70
 
-    ; Skills
-    set skill-combat 10 + random 20
-    set skill-gathering 10 + random 20
+    ; Skills - START WITH NEUTRAL VALUES
+    set skill-combat 15 + random 10    ; 15-25 range
+    set skill-gathering 15 + random 10 ; 15-25 range
 
-    ; Role
-    specialize-role
+    ; Role - START AS GENERALIST (will quickly adapt to fighter or gatherer)
+    set role "generalist"
+    set color white  ; neutral color
     set last-action "none"
     set combat-actions 0
     set gathering-actions 0
+
+    ; NEW: Initialize performance tracking
+    set combat-success-count 0
+    set combat-attempt-count 0
+    set gather-success-count 0
+    set gather-attempt-count 0
+    set defense-success-count 0
+    set defense-attempt-count 0
+
+    ; NEW: Initialize experience
+    set combat-experience 0
+    set gathering-experience 0
+
+    ; NEW: Initialize role adaptation
+    set role-confidence 50  ; neutral confidence
+    set role-change-cooldown 50  ; ticks before can change role again
+    set last-role-change-tick 0
+
+    ; NEW: Initialize performance averages
+    set recent-combat-success 0.5   ; neutral starting point
+    set recent-gather-success 0.5   ; neutral starting point
 
     ; Not infected at start
     set infection-timer 0
@@ -247,12 +290,14 @@ to go
     set day day + 1
   ]
 
-  ; Respawn resources less frequently
-  ; if ticks mod 150 = 0 [  ; Every 10 ticks
-  ;  respawn-resources
-  ; ]
+  ask humans [
+    human-behavior
+    ; NEW: Update role adaptation every few ticks
+    if ticks mod 10 = 0 [
+      update-role-adaptation
+    ]
+  ]
 
-  ask humans [human-behavior]
   ask zombies [zombie-behavior]
 
   tick
@@ -293,6 +338,87 @@ to human-behavior
   wander
 end
 
+; NEW: Dynamic role adaptation based on performance - simplified to two roles
+to update-role-adaptation
+  ; Only adapt if cooldown period has passed
+  if (ticks - last-role-change-tick) < role-change-cooldown [
+    stop
+  ]
+
+  ; Calculate performance metrics
+  let combat-success-rate 0
+  let gather-success-rate 0
+
+  if combat-attempt-count > 5 [
+    set combat-success-rate (combat-success-count / combat-attempt-count)
+  ]
+
+  if gather-attempt-count > 5 [
+    set gather-success-rate (gather-success-count / gather-attempt-count)
+  ]
+
+  ; Update rolling averages (weighted toward recent performance)
+  set recent-combat-success (recent-combat-success * 0.7 + combat-success-rate * 0.3)
+  set recent-gather-success (recent-gather-success * 0.7 + gather-success-rate * 0.3)
+
+  ; Determine best role based on performance - only fighter vs gatherer
+  let best-combat-score recent-combat-success + (combat-experience / 100)
+  let best-gather-score recent-gather-success + (gathering-experience / 100)
+
+  ; Role change logic with confidence thresholds
+  let old-role role
+  let role-change-threshold 0.15  ; need significant difference to change
+
+  ; Determine new role - simplified to two roles
+  let new-role role
+  if best-combat-score > best-gather-score + role-change-threshold [
+    set new-role "fighter"
+  ]
+
+  if best-gather-score > best-combat-score + role-change-threshold [
+    set new-role "gatherer"
+  ]
+
+  ; If no clear winner and currently generalist, pick randomly weighted by slight preference
+  if role = "generalist" [
+    ifelse best-combat-score > best-gather-score [
+      set new-role "fighter"
+    ] [
+      set new-role "gatherer"
+    ]
+  ]
+
+  ; Apply role change if different
+  if new-role != old-role [
+    set role new-role
+    set last-role-change-tick ticks
+    update-role-appearance
+
+    ; Boost confidence when finding a good role
+    set role-confidence min(list 100 (role-confidence + 20))
+
+    ; Adjust skills based on specialization
+    specialize-skills
+  ]
+end
+
+; NEW: Update appearance based on role - simplified to two roles
+to update-role-appearance
+  if role = "fighter" [ set color blue ]
+  if role = "gatherer" [ set color pink ]
+  if role = "generalist" [ set color white ]
+end
+
+; NEW: Adjust skills when specializing - simplified to two roles
+to specialize-skills
+  if role = "fighter" [
+    set skill-combat min(list 100 (skill-combat + 5))
+  ]
+
+  if role = "gatherer" [
+    set skill-gathering min(list 100 (skill-gathering + 5))
+  ]
+end
 
 to update-energy-level
   ;; Default passive drain
@@ -331,8 +457,8 @@ to update-trust-cooperation
   ]
 
   if last-action = "dismissive" [
-    set trust-level max (list 0 (trust-level - 5))
-    set cooperation-level max (list 0 (cooperation-level - 5))
+    set trust-level max (list 0 (trust-level - 6))
+    set cooperation-level max (list 0 (cooperation-level - 6))
   ]
 
   ;; Reset to prevent repeated adjustments
@@ -363,35 +489,43 @@ to death-check
   ]
 end
 
-to specialize-role
-  ifelse (skill-combat > skill-gathering) [
-    set role "defender"
-    set color blue
-  ][
-    set role "gatherer"
-    set color pink
-  ]
-end
-
-; Allow humans to switch roles based on skill, needs, and environment
-; NOTE: When does it evolve?
-to adapt-role
-  if (role = "gatherer" and skill-combat > skill-gathering + 1) [ set role "defender"]
-  if (role = "defender" and skill-gathering > skill-combat + 1) [ set role "gatherer" ]
-end
-
 to perform-task
-  if any? zombies in-radius vision-range [
-    if role = "defender" [
+  ; Task selection now based on current role and situation
+  let zombies-nearby zombies in-radius vision-range
+  let resources-nearby resources in-radius vision-range
+
+  ; Emergency: always fight if zombies very close regardless of role
+  if any? zombies-nearby with [distance myself <= 2] [
+    attack-zombie
+    stop
+  ]
+
+  ; Role-based task selection - simplified to two roles
+  if role = "fighter" [
+    if any? zombies-nearby [
       attack-zombie
     ]
   ]
 
- if role = "gatherer" [
-   gather-resources
- ]
+  if role = "gatherer" [
+    if any? resources-nearby [
+      gather-resources
+    ]
+  ]
+
+  if role = "generalist" [
+    ; Try to do what's most needed
+    ifelse any? zombies-nearby [
+      attack-zombie
+    ] [
+      if any? resources-nearby [
+        gather-resources
+      ]
+    ]
+  ]
 end
 
+; MODIFIED: Track performance in combat
 to attack-zombie
   let visible-zombies zombies in-radius vision-range
 
@@ -402,24 +536,32 @@ to attack-zombie
     ifelse distance target-zombie > 1 [
       fd speed * 1.2  ; Move closer if not yet in range
     ] [
-      ; Attack only if probability check succeeds
-      ; NOTE: And if there is enough energy
-      perform-attack target-zombie
-      set last-action "attack"
+      ; Attack and track performance
+      set combat-attempt-count combat-attempt-count + 1
+
+      ifelse random-float 40 < skill-combat [
+        perform-attack target-zombie
+        set combat-success-count combat-success-count + 1
+        set combat-experience min(list 100 (combat-experience + 1))
+        set last-action "attack"
+      ] [
+        ; Failed attack
+        set last-action "missed-attack"
+      ]
     ]
   ]
 end
 
-; Gather resource when the area is safe and if you don't have maximum resource invetory (100) yet
-; Otherwise, run-hide
+; MODIFIED: Track performance in gathering
 to gather-resources
   let nearby-resources resources in-radius vision-range
   if any? nearby-resources [
     ; Check safety condition
     let zombies-nearby zombies in-radius vision-range
-    let defenders-nearby humans with [role = "defender"] in-radius vision-range
+    let fighters-nearby humans with [role = "fighter"] in-radius vision-range
 
-    ifelse any? zombies-nearby and not any? defenders-nearby [
+    ; Only gather if safe or have protection from fighters
+    ifelse not any? zombies-nearby or any? fighters-nearby [
       let target-resource one-of nearby-resources
       face target-resource
 
@@ -427,7 +569,9 @@ to gather-resources
       ifelse distance target-resource > 1 [
         fd speed
       ] [
-        ; Close enough to gather
+        ; Close enough to gather - track performance
+        set gather-attempt-count gather-attempt-count + 1
+
         let resource-amount [amount] of target-resource
         let space-left 100 - resource-inventory
 
@@ -436,11 +580,14 @@ to gather-resources
           set resource-inventory resource-inventory + gathered-amount
 
           ask target-resource [ die ]
+          set gather-success-count gather-success-count + 1
+          set gathering-experience min(list 100 (gathering-experience + 1))
           set last-action "gather"
         ]
       ]
     ][
-      ; run-hide
+      ; Too dangerous - run away
+      run-away
     ]
   ]
 end
@@ -471,7 +618,6 @@ to ask-for-resources
   ]
 end
 
-
 to give-resources-to [recipient]
   if trust-level > 71 and cooperation-level > 71 [
     let spare resource-inventory - 30
@@ -493,7 +639,6 @@ to give-resources-to [recipient]
   ]
 end
 
-
 to cooperate-with-others
   if trust-level > 71 and cooperation-level > 71 [
 
@@ -513,8 +658,8 @@ to cooperate-with-others
       ]
     ]
 
-    ;; ===== DEFEND OTHERS =====
-    if skill-combat > skill-gathering [
+    ;; ===== DEFEND OTHERS (only fighters do this) =====
+    if role = "fighter" [
       let zombies-nearby zombies in-radius vision-range
       let humans-nearby other humans in-radius vision-range
       let endangered one-of humans-nearby with [
@@ -532,9 +677,12 @@ to cooperate-with-others
           ]
           ifelse random-float 100 < 80 [
             perform-attack target-zombie
+            set defense-success-count defense-success-count + 1
+            set defense-attempt-count defense-attempt-count + 1
             set last-action "defend"
             stop
           ] [
+            set defense-attempt-count defense-attempt-count + 1
             set last-action "dismissive"
             stop
             ]
@@ -610,17 +758,13 @@ end
 
 ; --------ZOMBIE BEHAVIOR---------
 to zombie-behavior
-
   handle-zombie-decay
-
   ; Skip behavior if dead from decay
   if health <= 0 [ die stop ]
-
   ; Update chase timer
   if chase-timer > 0 [
     set chase-timer chase-timer - 1
   ]
-
   ; State-based behavior
   (ifelse
     state = "wandering" [zombie-wander]
@@ -629,24 +773,19 @@ to zombie-behavior
     state = "feeding" [zombie-feed]
     state = "breaking-in" [zombie-break-shelter]
   )
-
   ; Check for horde opportunities while wandering or chasing
   if state = "wandering" or state = "chasing" [
     check-for-horde-behavior
   ]
 end
-
 to handle-zombie-decay
   set age-ticks age-ticks + 1
-
   ; Begin decay after 3 years (~365 * 24 * 3 ticks)
   if age-ticks > 26280 [
     let decay-damage decay-rate * (age-ticks / 1000)
     set health health - decay-damage
-
     ; Visual decay indication
     set color scale-color red health 0 100
-
     ; Reduce abilities when weak
     if health < 30 [
       set speed speed * 0.8
@@ -654,17 +793,14 @@ to handle-zombie-decay
       set vision-range max (list (vision-range - 0.1) 1)
     ]
   ]
-
   ; Mark for death from old age
   if age-ticks >= max-lifespan [
     set health 0
   ]
 end
-
 to zombie-wander
   let nearby-humans humans in-radius vision-range
   let heard-humans humans in-radius hearing-range
-
   ; Start chasing if human detected
   if any? nearby-humans or any? heard-humans [
     let all-detected-humans (turtle-set nearby-humans heard-humans)
@@ -674,28 +810,22 @@ to zombie-wander
     set horde-leader? true  ; First to spot becomes leader
     stop
   ]
-
     ; Random wandering
       rt random 60 - random 30
       fd speed * 0.5
-
-
   ; Reduce satiation over time
   set satiation max (list (satiation - 0.1) 0)
 end
-
 to zombie-chase
   if target-human = nobody or [state] of target-human = "corpse" [
     reset-chase
     stop
   ]
-
   ; Give up if too far or timed out
   if chase-timer <= 0 or distance target-human > (vision-range * 3) [
     reset-chase
     stop
   ]
-
   ; Handle shelter detection
   if [state] of target-human = "hiding" and [[is-shelter] of patch-here] of target-human [
     let shelter-patch [patch-here] of target-human
@@ -706,10 +836,8 @@ to zombie-chase
       stop
     ]
   ]
-
   face target-human
   fd speed
-
   ; Check for attack opportunity, check if human is attackable in distance
   if distance target-human < 1 [
     let in-shelter? false
@@ -720,11 +848,9 @@ to zombie-chase
       attack-human target-human
     ]
   ]
-
   ; Leave scent trail for horde
   ask patch-here [ set zombie-scent zombie-scent + 5 ]
 end
-
 to zombie-follow-horde
   if following-zombie = nobody or [state] of following-zombie != "chasing" [
     set state "wandering"
@@ -733,11 +859,9 @@ to zombie-follow-horde
     ; reset-chase
     stop
   ]
-
   ; Follow the leader zombie
   face following-zombie
   fd speed * 0.9  ; Slightly slower than leader
-
   ; If close enough to leader's target, switch to chasing same target
   if [target-human] of following-zombie != nobody [
     set target-human [target-human] of following-zombie
@@ -748,7 +872,6 @@ to zombie-follow-horde
     ]
   ]
 end
-
 to check-for-horde-behavior
   ; Only join horde if not already leading one
   if not horde-leader? and state != "following-horde" [
@@ -756,38 +879,32 @@ to check-for-horde-behavior
     let chasing-zombies other zombies in-radius (hearing-range * 1.5) with [
       state = "chasing" and target-human != nobody
     ]
-
     if any? chasing-zombies [
       ; Join the nearest chasing zombie's horde
       let leader min-one-of chasing-zombies [distance myself]
-
       ; Only join if the target is reasonably close
       if distance [target-human] of leader < (hearing-range * 2) [
         set following-zombie leader
         set target-human [target-human] of leader
         set state "following-horde"
         set chase-timer 60  ; Shorter commitment for followers
-
         set color scale-color red 50 0 100  ; Darker red for horde followers
       ]
     ]
   ]
 end
-
 to attack-human [target]
   if target != nobody [
     ask target [
       ; Apply damage and stress
       set energy energy - [strength] of myself
       set stress-level min (list (stress-level + 20) 100)
-
       ; Infect if not already infected (50% chance)
       if state != "infected" and random 100 < 50 [
         set state "infected"
         set infection-timer 50 + random 50
         set color violet
       ]
-
       ; Handle death
       if energy <= 0 [
         ifelse state = "infected" [
@@ -800,37 +917,31 @@ to attack-human [target]
         ]
       ]
     ]
-
     ; Update zombie state after attack
     set state "feeding"
   ]
 end
-
 to zombie-break-shelter
   ; Abort if no valid shelter
   if target-shelter = nobody or not [is-shelter] of target-shelter [
     reset-breaking
     stop
   ]
-
   ; Move closer if not at shelter
   if patch-here != target-shelter [
     face target-shelter
     fd speed * 0.5
     stop
   ]
-
   ; Mark shelter as under attack
   ask target-shelter [
     set being-broken? true
     set break-timer break-timer + 1
     set pcolor scale-color red break-timer 0 max-break-time
   ]
-
   ; Track zombie’s own breaking progress
   set break-progress break-progress + 1
   let max-time [max-break-time] of target-shelter
-
   ; If shelter broken
   if break-progress >= max-time [
     ask target-shelter [
@@ -838,18 +949,15 @@ to zombie-break-shelter
       set being-broken? false
       set pcolor gray
     ]
-
     ; Attack anyone inside
     let humans-inside humans-on target-shelter
     if any? humans-inside [
       set target-human one-of humans-inside
       attack-human target-human
     ]
-
     reset-breaking
     stop
   ]
-
   ; Give up if taking too long
   if break-progress > (max-time + 50) [
     ask target-shelter [
@@ -860,18 +968,14 @@ to zombie-break-shelter
     reset-breaking
   ]
 end
-
 to transform-to-zombie
   let current-patch patch-here
-
   ; Create new zombie at same location
   hatch-zombies 1 [
     set shape "person"
     set color red
     set size 1.5
-
     move-to current-patch
-
     set health 75 + random 25
     set speed 0.2 + random-float 0.8
     set strength 7 + random 3
@@ -879,56 +983,39 @@ to transform-to-zombie
     set vision-range 2 + random 3
     set hearing-range 3 + random 2
     set satiation 0
-
-
     ; Initialize horde behavior properties
     set target-human nobody
     set horde-leader? false
     set following-zombie nobody
     set chase-timer 0
-
     set age-ticks 0
     set decay-rate 0.01 + random-float 0.04
     set max-lifespan 1000 + random 3000
-
     set target-shelter nobody
     set break-progress 0
   ]
-
   ; Update global counters
   ; set total-infections total-infections + 1
   ; set total-survivors total-survivors - 1
-
   ; Remove original human
   die
 end
-
 ; ------- HELPER FUNCTIONS ------------
-
 to zombie-feed
   set satiation min (list (satiation + 5) 100)
   reset-chase
 end
-
 to reset-chase
   set state "wandering"
   set target-human nobody
   set horde-leader? false
   set chase-timer 0
 end
-
 to reset-breaking
   set state "wandering"
   set target-shelter nobody
   set break-progress 0
 end
-
-
-
-
-
-
-
 @#$#@#$#@
 GRAPHICS-WINDOW
 328
