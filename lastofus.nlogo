@@ -9,6 +9,7 @@ breed [resources resource]
 globals [
   day
   resource-scarcity
+  total-conflicts
 ]
 
 ; ----- AGENT PROPERTIES -----
@@ -109,6 +110,7 @@ to setup
   setup-humans
   setup-zombies
   setup-resources
+  set total-conflicts 0
 end
 
 ; Create the environment with varied terrain
@@ -354,7 +356,10 @@ to human-behavior
   ; 7. Update trust and cooperation levels based on last actions
   update-trust-cooperation
 
-  ; 8. Movement or wandering as fallback or end-of-turn activity
+  ; 8. Check if there is conflict between the group based on trust level and stress level
+  check-for-conflict
+
+  ; 9. Movement or wandering as fallback or end-of-turn activity
   if last-action = "none" [
     wander
   ]
@@ -452,6 +457,7 @@ to update-energy-level
   if last-action = "hide"           [ set drain 0.1 ]
   if last-action = "defend"         [ set drain 1.2 ]
   if last-action = "attack"         [ set drain 1.2 ]
+  if last-action = "conflict"       [ set drain 1.0 ]
 
   ;; Apply the drain, but never go below 1
   set energy max (list 1 (energy - drain))
@@ -505,6 +511,9 @@ to update-stress
   if on-shelter? [
     ;; Decrease stress gradually if on shelter
     set stress-level max (list 0 (stress-level - 5))
+  ]
+  if last-action = "conflict" [
+    set stress-level min (list 100 (stress-level + 5))
   ]
 end
 
@@ -839,6 +848,25 @@ to help-others-in-combat
   ]
 end
 
+; --- FOR CONFLICT based on their trust level and stress level -----
+to check-for-conflict
+  let nearby-humans other humans in-radius vision-range
+  if any? nearby-humans [
+    let partner one-of nearby-humans
+    if (stress-level > 70) and (trust-level < 40) [
+      if random-float 100 < 20 [  ; 20% chance of conflict
+        ; Apply effects of conflict
+        set last-action "conflict"
+        ; Affect the other human too
+        ask partner [
+          set last-action "conflict"
+        ]
+        set total-conflicts total-conflicts + 1
+      ]
+    ]
+  ]
+end
+
 ; --------ZOMBIE BEHAVIOR---------
 to zombie-behavior
   handle-zombie-decay
@@ -1103,11 +1131,40 @@ to reset-breaking
   set target-shelter nobody
   set break-progress 0
 end
+
+; ------ TO REPORT FUNCTIONS -------
+to-report conflict
+  report total-conflicts
+end
+
+to-report survival-rate
+  if initial-human-population = 0 [ report 0 ]
+  report (count humans / initial-human-population) * 100
+end
+
+to-report resource-efficiency
+  let human-count count humans
+  if human-count = 0 [ report 0 ]
+
+  ;; Total available resources on map
+  let total-available-resources sum [amount] of resources
+
+  ;; Average cooperation in the population
+  let avg-cooperation mean [cooperation-level] of humans
+
+  ;; Normalize cooperation to 0–1
+  let normalized-cooperation avg-cooperation / 100
+
+  ;; Efficiency = resources adjusted by cooperation per person
+  let efficiency (total-available-resources * normalized-cooperation) / human-count
+  report efficiency
+end
+
 @#$#@#$#@
 GRAPHICS-WINDOW
-328
+253
 10
-999
+924
 552
 -1
 -1
@@ -1132,10 +1189,10 @@ ticks
 30.0
 
 BUTTON
-96
-94
-163
-127
+53
+95
+120
+128
 setup
 setup
 NIL
@@ -1149,10 +1206,10 @@ NIL
 1
 
 SLIDER
-61
-152
-271
-185
+18
+153
+228
+186
 initial-human-population
 initial-human-population
 0
@@ -1164,25 +1221,25 @@ NIL
 HORIZONTAL
 
 SLIDER
-60
-197
-272
-230
+17
+198
+229
+231
 initial-zombie-population
 initial-zombie-population
 0
 100
-5.0
+19.0
 1
 1
 NIL
 HORIZONTAL
 
 BUTTON
-174
-94
-238
-128
+131
+95
+195
+129
 NIL
 go
 T
@@ -1196,10 +1253,10 @@ NIL
 1
 
 PLOT
-1024
-28
-1224
-178
+20
+260
+220
+410
 Population Over Time
 NIL
 NIL
@@ -1215,14 +1272,68 @@ PENS
 "humans" 1.0 0 -13345367 true "" "plot count humans"
 
 TEXTBOX
-1030
-201
-1180
-229
+26
+433
+176
+461
 Red Line - Zombies\nBlue Line - Humans
 11
 0.0
 1
+
+PLOT
+967
+18
+1167
+168
+Survival Rate
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -16777216 true "" "plot survival-rate\n"
+
+PLOT
+974
+383
+1174
+533
+Conflict Frequency
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -16777216 true "" "plot conflict"
+
+PLOT
+968
+202
+1168
+352
+Resource Efficiency
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -16777216 true "" "plot resource-efficiency"
 
 @#$#@#$#@
 ## WHAT IS IT?
