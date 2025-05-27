@@ -257,7 +257,7 @@ to setup-zombies
 
     set age-ticks 0
     set decay-rate 0.01 + random-float 0.04
-    set max-lifespan 500 + random 500
+    set max-lifespan 700 + random 300
   ]
 end
 
@@ -349,7 +349,9 @@ to human-behavior
   update-trust-cooperation
 
   ; 8. Movement or wandering as fallback or end-of-turn activity
-  wander
+  if last-action = "none" [
+    wander
+  ]
 end
 
 ; NEW: Dynamic role adaptation based on performance - simplified to two roles
@@ -381,7 +383,7 @@ to update-role-adaptation
 
   ; Role change logic with confidence thresholds
   let old-role role
-  let role-change-threshold 0.20  ; need significant difference to change
+  let role-change-threshold 0.15  ; need significant difference to change
 
   ; Determine new role - simplified to two roles
   let new-role role
@@ -939,6 +941,7 @@ to attack-human [target]
         set state "infected"
         set infection-timer 50 + random 50
         set color violet
+        stop
       ]
       ; Handle death
       if energy <= 0 [
