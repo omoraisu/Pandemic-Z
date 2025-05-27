@@ -845,7 +845,6 @@ end
 to check-for-horde-behavior
   ; Only join horde if not already leading one
   if not horde-leader? and state != "following-horde" [
-    ; Look for other zombies chasing humans
     let chasing-zombies other zombies in-radius (hearing-range * 1.5) with [
       state = "chasing" and target-human != nobody
     ]
@@ -1694,7 +1693,7 @@ initial-zombie-population
 initial-zombie-population
 0
 30
-6.0
+12.0
 1
 1
 NIL
