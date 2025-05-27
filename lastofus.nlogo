@@ -331,6 +331,12 @@ to human-behavior
     stop  ;; do nothing else this tick
   ]
 
+  ; 3.5 If energy is enough, help comrades
+  if energy > 30 [  ; Only help if you have enough energy
+    help-others-in-combat
+  ]
+
+
   ; 4. If energy is sufficient, do main tasks
   if energy > 20 [
     perform-task
@@ -792,6 +798,45 @@ to perform-attack [target]
       set health health - ([strength] of myself * ([skill-combat] of myself / 100))
       if health <= 0 [ die ]
     ]
+end
+
+to help-others-in-combat
+  ; Look for humans being attacked by zombies within vision range
+  let humans-in-danger other humans in-radius vision-range with [
+    any? zombies in-radius vision-range  ; humans with zombies very close (being attacked)
+  ]
+
+  if any? humans-in-danger [
+    let human-to-help one-of humans-in-danger
+
+    ; Find the zombie attacking that human
+    let attacking-zombie min-one-of (zombies in-radius vision-range) [
+      distance human-to-help
+    ]
+
+    if attacking-zombie != nobody [
+      ; Move toward the zombie to help
+      face attacking-zombie
+
+      ifelse distance attacking-zombie > 1 [
+        fd speed * 1.2  ; Move faster when helping
+        set last-action "helping"
+      ] [
+        ; Close enough to attack - help fight the zombie
+        set combat-attempt-count combat-attempt-count + 1
+
+        ifelse random-float 40 < skill-combat [
+          perform-attack attacking-zombie
+          set combat-success-count combat-success-count + 1
+          set combat-experience min(list 100 (combat-experience + 2))
+          set last-action "helped-fight"
+        ] [
+          set last-action "missed-help"
+        ]
+      ]
+      stop  ; Don't do other actions this tick
+    ]
+  ]
 end
 
 ; --------ZOMBIE BEHAVIOR---------

@@ -179,14 +179,14 @@ to setup-humans
   create-humans initial-human-population [
     set shape "person"
     set color white
-    set size 1.5
+    set size 2
     move-to one-of patches with [pcolor = orange and not any? humans-here]
 
     ; Initialize properties
     ; Physical
     set energy 75 + random 25
     set speed 0.5 + random-float 0.5
-    set strength  3 + random 7
+    set strength  7 + random 3
     set state "wandering"
     set vision-range 3 + random 2
 
@@ -199,7 +199,7 @@ to setup-humans
     set cooperation-level 30 + random 70
 
     ; Skills - START WITH NEUTRAL VALUES
-    set skill-combat 15 + random 10    ; 15-25 range
+    set skill-combat 20 + random 10    ; 15-25 range
     set skill-gathering 15 + random 10 ; 15-25 range
 
     ; Role - START AS GENERALIST (will quickly adapt to fighter or gatherer)
@@ -218,12 +218,12 @@ to setup-humans
     set defense-attempt-count 0
 
     ; NEW: Initialize experience
-    set combat-experience 0
-    set gathering-experience 0
+    set combat-experience 5
+    set gathering-experience 5
 
     ; NEW: Initialize role adaptation
     set role-confidence 50  ; neutral confidence
-    set role-change-cooldown 50  ; ticks before can change role again
+    set role-change-cooldown 20  ; ticks before can change role again
     set last-role-change-tick 0
 
     ; NEW: Initialize performance averages
@@ -239,17 +239,14 @@ to setup-zombies
   create-zombies initial-zombie-population [
     set shape "person"
     set color red
-    set size 1.5
-    move-to one-of patches with [
-      pxcor > 0 and pycor < 0 and  ; Positive X, negative Y coordinates (lower right)
-      not any? turtles-here
-    ]
+    set size 2
+    move-to one-of patches with [not any? turtles-here]
 
-    set health 75 + random 25
-    set speed 0.2 + random-float 0.8
-    set strength 7 + random 3
+    set health 30 + random 20
+    set speed 0.2
+    set strength 3 + random 7
     set state "wandering"
-    set vision-range 2 + random 3
+    set vision-range 2 + random 2
     set hearing-range 3 + random 2
     set satiation 0
 
@@ -260,7 +257,7 @@ to setup-zombies
 
     set age-ticks 0
     set decay-rate 0.01 + random-float 0.04
-    set max-lifespan 1000 + random 3000
+    set max-lifespan 700 + random 300
   ]
 end
 
@@ -270,6 +267,22 @@ to setup-resources
     ; Each resource patch has a chance to contain a resource based on resource-level
     let spawn-chance (resource-level / 40) * 70  ; Higher resource-level = higher spawn chance
     if random-float 100 < spawn-chance [
+      sprout 1 [
+        set breed resources
+        set color yellow
+        set shape "circle"
+        set size 0.8
+        set amount 10 + random 20
+      ]
+    ]
+  ]
+end
+
+to respawn-resources
+  ask patches with [pcolor >= green and pcolor <= lime and not any? resources-here] [
+    ; Chance to respawn based on resource-level and resource-scarcity
+    let respawn-chance (resource-level / 50) * (100 - resource-scarcity) / 100 * 15
+    if random-float 100 < respawn-chance [
       sprout 1 [
         set breed resources
         set color yellow
@@ -298,8 +311,9 @@ to go
     ]
   ]
 
-  ask zombies [zombies-behavior]
+  ask zombies [zombie-behavior]
 
+  respawn-resources
   tick
 end
 
@@ -316,6 +330,12 @@ to human-behavior
     hide-and-recover
     stop  ;; do nothing else this tick
   ]
+
+  ; 3.5 If energy is enough, help comrades
+  if energy > 30 [  ; Only help if you have enough energy
+    help-others-in-combat
+  ]
+
 
   ; 4. If energy is sufficient, do main tasks
   if energy > 20 [
@@ -335,7 +355,9 @@ to human-behavior
   update-trust-cooperation
 
   ; 8. Movement or wandering as fallback or end-of-turn activity
-  wander
+  if last-action = "none" [
+    wander
+  ]
 end
 
 ; NEW: Dynamic role adaptation based on performance - simplified to two roles
@@ -346,14 +368,14 @@ to update-role-adaptation
   ]
 
   ; Calculate performance metrics
-  let combat-success-rate 0
-  let gather-success-rate 0
+  let combat-success-rate 0.2
+  let gather-success-rate 0.2
 
-  if combat-attempt-count > 5 [
+  if combat-attempt-count > 3 [
     set combat-success-rate (combat-success-count / combat-attempt-count)
   ]
 
-  if gather-attempt-count > 5 [
+  if gather-attempt-count > 3 [
     set gather-success-rate (gather-success-count / gather-attempt-count)
   ]
 
@@ -456,6 +478,11 @@ to update-trust-cooperation
     set cooperation-level min (list 100 (cooperation-level + 4))
   ]
 
+  if last-action = "join-ally" [
+    set trust-level min (list 100 (trust-level + 5))
+    set cooperation-level min (list 100 (cooperation-level + 5))
+  ]
+
   if last-action = "dismissive" [
     set trust-level max (list 0 (trust-level - 6))
     set cooperation-level max (list 0 (cooperation-level - 6))
@@ -542,7 +569,7 @@ to attack-zombie
       ifelse random-float 40 < skill-combat [
         perform-attack target-zombie
         set combat-success-count combat-success-count + 1
-        set combat-experience min(list 100 (combat-experience + 1))
+        set combat-experience min(list 100 (combat-experience + 3))
         set last-action "attack"
       ] [
         ; Failed attack
@@ -581,7 +608,7 @@ to gather-resources
 
           ask target-resource [ die ]
           set gather-success-count gather-success-count + 1
-          set gathering-experience min(list 100 (gathering-experience + 1))
+          set gathering-experience min(list 100 (gathering-experience + 2))
           set last-action "gather"
         ]
       ]
@@ -668,14 +695,33 @@ to cooperate-with-others
 
       if endangered != nobody and any? zombies-nearby [
         ;; Random chance to defend
-        if random-float 100 < 85 [ ; 85% chance to defend
+        if random-float 100 < 85 [ ; 90% chance to defend
+                                   ;; Find a zombie near the endangered human
           let target-zombie min-one-of zombies-nearby [distance endangered]
-          face target-zombie
 
+          ;; Check if any other human fighter is near the zombie
+          let allies-near-zombie humans with [
+            role = "fighter" and self != myself and distance target-zombie <= 1.5
+          ]
+
+          ;; Move closer to ally first if there is one
+          if any? allies-near-zombie [
+            let chosen-ally one-of allies-near-zombie
+            face chosen-ally
+            if distance chosen-ally > 1 [
+              fd speed * 1.2
+              set last-action "join-ally"
+              stop
+            ]
+          ]
+
+          ;; Now proceed to attack the zombie
+          face target-zombie
           if distance target-zombie > 1 [
             fd speed * 1.3
           ]
-          ifelse random-float 100 < 80 [
+
+          ifelse random-float 100 < 90 [
             perform-attack target-zombie
             set defense-success-count defense-success-count + 1
             set defense-attempt-count defense-attempt-count + 1
@@ -685,7 +731,7 @@ to cooperate-with-others
             set defense-attempt-count defense-attempt-count + 1
             set last-action "dismissive"
             stop
-            ]
+          ]
         ]
       ]
     ]
@@ -748,12 +794,314 @@ to hide-and-recover
 end
 
 to perform-attack [target]
-  if random-float 40 < skill-combat [
-    ask target [
-      set health health - [strength] of myself
+  ask target [
+      set health health - ([strength] of myself * ([skill-combat] of myself / 100))
       if health <= 0 [ die ]
     ]
+end
+
+to help-others-in-combat
+  ; Look for humans being attacked by zombies within vision range
+  let humans-in-danger other humans in-radius vision-range with [
+    any? zombies in-radius   ; humans with zombies very close (being attacked)
   ]
+
+  if any? humans-in-danger [
+    let human-to-help one-of humans-in-danger
+
+    ; Find the zombie attacking that human
+    let attacking-zombie min-one-of (zombies in-radius vision-range) [
+      distance human-to-help
+    ]
+
+    if attacking-zombie != nobody [
+      ; Move toward the zombie to help
+      face attacking-zombie
+
+      ifelse distance attacking-zombie > 1 [
+        fd speed * 1.2  ; Move faster when helping
+        set last-action "helping"
+      ] [
+        ; Close enough to attack - help fight the zombie
+        set combat-attempt-count combat-attempt-count + 1
+
+        ifelse random-float 40 < skill-combat [
+          perform-attack attacking-zombie
+          set combat-success-count combat-success-count + 1
+          set combat-experience min(list 100 (combat-experience + 2))
+          set last-action "helped-fight"
+        ] [
+          set last-action "missed-help"
+        ]
+      ]
+      stop  ; Don't do other actions this tick
+    ]
+  ]
+end
+
+; --------ZOMBIE BEHAVIOR---------
+to zombie-behavior
+  handle-zombie-decay
+  ; Skip behavior if dead from decay
+  if health <= 0 [ die stop ]
+  ; Update chase timer
+  if chase-timer > 0 [
+    set chase-timer chase-timer - 1
+  ]
+  ; State-based behavior
+  (ifelse
+    state = "wandering" [zombie-wander]
+    state = "chasing" [zombie-chase]
+    state = "following-horde" [zombie-follow-horde]
+    state = "feeding" [zombie-feed]
+    state = "breaking-in" [zombie-break-shelter]
+  )
+  ; Check for horde opportunities while wandering or chasing
+  if state = "wandering" or state = "chasing" [
+    check-for-horde-behavior
+  ]
+end
+to handle-zombie-decay
+  set age-ticks age-ticks + 1
+  ; Begin decay after 3 years (~365 * 24 * 3 ticks)
+  if age-ticks > 26280 [
+    let decay-damage decay-rate * (age-ticks / 1000)
+    set health health - decay-damage
+    ; Visual decay indication
+    set color scale-color red health 0 100
+    ; Reduce abilities when weak
+    if health < 30 [
+      set speed speed * 0.8
+      set strength strength * 0.9
+      set vision-range max (list (vision-range - 0.1) 1)
+    ]
+  ]
+  ; Mark for death from old age
+  if age-ticks >= max-lifespan [
+    set health 0
+  ]
+end
+to zombie-wander
+  let nearby-humans humans in-radius vision-range
+  let heard-humans humans in-radius hearing-range
+  ; Start chasing if human detected
+  if any? nearby-humans or any? heard-humans [
+    let all-detected-humans (turtle-set nearby-humans heard-humans)
+    set target-human min-one-of all-detected-humans [distance myself]
+    set state "chasing"
+    set chase-timer 60  ; Give up after 100 ticks if can't catch
+    set horde-leader? true  ; First to spot becomes leader
+    stop
+  ]
+    ; Random wandering
+      rt random 60 - random 30
+      fd speed * 0.5
+  ; Reduce satiation over time
+  set satiation max (list (satiation - 0.1) 0)
+end
+to zombie-chase
+  if target-human = nobody or [state] of target-human = "corpse" [
+    reset-chase
+    stop
+  ]
+  ; Give up if too far or timed out
+  if chase-timer <= 0 or distance target-human > (vision-range * 3) [
+    reset-chase
+    stop
+  ]
+  ; Handle shelter detection
+  if [state] of target-human = "hiding" and [[is-shelter] of patch-here] of target-human [
+    let shelter-patch [patch-here] of target-human
+    if [shelter-integrity] of shelter-patch > 0 [
+      set state "breaking-in"
+      set target-shelter shelter-patch
+      set break-progress 0
+      stop
+    ]
+  ]
+  face target-human
+  fd speed
+  ; Check for attack opportunity, check if human is attackable in distance
+  if distance target-human < 1 [
+    let in-shelter? false
+    if [state] of target-human = "hiding" and [[is-shelter] of patch-here] of target-human [
+      set in-shelter? ([shelter-integrity] of patch-here) > 0
+    ]
+    if not in-shelter? [
+      attack-human target-human
+    ]
+  ]
+  ; Leave scent trail for horde
+  ask patch-here [ set zombie-scent zombie-scent + 5 ]
+end
+to zombie-follow-horde
+  if following-zombie = nobody or [state] of following-zombie != "chasing" [
+    set state "wandering"
+    set following-zombie nobody
+    set target-human nobody
+    ; reset-chase
+    stop
+  ]
+  ; Follow the leader zombie
+  face following-zombie
+  fd speed * 0.9  ; Slightly slower than leader
+  ; If close enough to leader's target, switch to chasing same target
+  if [target-human] of following-zombie != nobody [
+    set target-human [target-human] of following-zombie
+    if distance target-human < vision-range [
+      set state "chasing"
+      set following-zombie nobody
+      set chase-timer 60  ; Shorter timer for followers
+    ]
+  ]
+end
+to check-for-horde-behavior
+  ; Only join horde if not already leading one
+  if not horde-leader? and state != "following-horde" [
+    ; Look for other zombies chasing humans
+    let chasing-zombies other zombies in-radius (hearing-range * 1.5) with [
+      state = "chasing" and target-human != nobody
+    ]
+    if any? chasing-zombies [
+      ; Join the nearest chasing zombie's horde
+      let leader min-one-of chasing-zombies [distance myself]
+      ; Only join if the target is reasonably close
+      if distance [target-human] of leader < (hearing-range * 2) [
+        set following-zombie leader
+        set target-human [target-human] of leader
+        set state "following-horde"
+        set chase-timer 60  ; Shorter commitment for followers
+        set color scale-color red 50 0 100  ; Darker red for horde followers
+      ]
+    ]
+  ]
+end
+to attack-human [target]
+  if target != nobody [
+    ask target [
+      ; Apply damage and stress
+      set energy energy - [strength] of myself
+      ; Infect if not already infected (20% chance)
+      if state != "infected" and random 100 < 15 [
+        set state "infected"
+        set infection-timer 50 + random 50
+        set color violet
+        stop
+      ]
+      ; Handle death
+      if energy <= 0 [
+        ifelse state = "infected" [
+          transform-to-zombie
+        ] [
+          set state "corpse"
+          set color gray
+;          set total-deaths total-deaths + 1
+;          set total-survivors total-survivors - 1
+        ]
+      ]
+    ]
+    ; Update zombie state after attack
+    set state "feeding"
+  ]
+end
+
+to zombie-break-shelter
+  ; Abort if no valid shelter
+  if target-shelter = nobody or not [is-shelter] of target-shelter [
+    reset-breaking
+    stop
+  ]
+  ; Move closer if not at shelter
+  if patch-here != target-shelter [
+    face target-shelter
+    fd speed * 0.5
+    stop
+  ]
+  ; Mark shelter as under attack
+  ask target-shelter [
+    set being-broken? true
+    set break-timer break-timer + 1
+    set pcolor scale-color red break-timer 0 max-break-time
+  ]
+  ; Track zombie’s own breaking progress
+  set break-progress break-progress + 1
+  let max-time [max-break-time] of target-shelter
+  ; If shelter broken
+  if break-progress >= max-time [
+    ask target-shelter [
+      set shelter-integrity 0
+      set being-broken? false
+      set pcolor gray
+    ]
+    ; Attack anyone inside
+    let humans-inside humans-on target-shelter
+    if any? humans-inside [
+      set target-human one-of humans-inside
+      attack-human target-human
+    ]
+    reset-breaking
+    stop
+  ]
+  ; Give up if taking too long
+  if break-progress > (max-time + 50) [
+    ask target-shelter [
+      set being-broken? false
+      set break-timer 0
+      set pcolor brown
+    ]
+    reset-breaking
+  ]
+end
+to transform-to-zombie
+  let current-patch patch-here
+  ; Create new zombie at same location
+  hatch-zombies 1 [
+    set shape "person"
+    set color red
+    set size 2
+    move-to current-patch
+
+    set health 30 + random 20
+    set speed 0.2 + random-float 0.3
+    set strength 3 + random 7
+    set state "wandering"
+    set vision-range 2 + random 2
+    set hearing-range 3 + random 2
+    set satiation 0
+
+    set target-human nobody
+    set horde-leader? false
+    set following-zombie nobody
+    set chase-timer 0
+
+    set age-ticks 0
+    set decay-rate 0.01 + random-float 0.04
+    set max-lifespan 500 + random 500
+
+    set target-shelter nobody
+    set break-progress 0
+  ]
+  ; Update global counters
+  ; set total-infections total-infections + 1
+  ; set total-survivors total-survivors - 1
+  ; Remove original human
+  die
+end
+; ------- HELPER FUNCTIONS ------------
+to zombie-feed
+  set satiation min (list (satiation + 5) 100)
+  reset-chase
+end
+to reset-chase
+  set state "wandering"
+  set target-human nobody
+  set horde-leader? false
+  set chase-timer 0
+end
+to reset-breaking
+  set state "wandering"
+  set target-shelter nobody
+  set break-progress 0
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
@@ -809,7 +1157,7 @@ initial-human-population
 initial-human-population
 0
 100
-15.0
+10.0
 1
 1
 NIL
@@ -824,7 +1172,7 @@ initial-zombie-population
 initial-zombie-population
 0
 100
-17.0
+5.0
 1
 1
 NIL
