@@ -256,6 +256,10 @@ to go
 
   ask humans [human-behavior]
   ask zombies [zombie-behavior]
+<<<<<<< HEAD
+=======
+
+>>>>>>> 0ac34e2e525063d1b5feb6f55edfce54a3c32faa
 tick
 end
 
@@ -640,6 +644,7 @@ to perform-attack [target]
   ]
 end
 
+<<<<<<< HEAD
 to-report conflict
   report total-conflicts
 end
@@ -694,6 +699,322 @@ end
 
 to handle-zombie-decay
   set age-ticks age-ticks + 1
+=======
+; --------ZOMBIE BEHAVIOR---------
+to zombie-behavior
+
+  handle-zombie-decay
+
+  ; Skip behavior if dead from decay
+  if health <= 0 [ die stop ]
+
+  ; Update chase timer
+  if chase-timer > 0 [
+    set chase-timer chase-timer - 1
+  ]
+
+  ; State-based behavior
+  (ifelse
+    state = "wandering" [zombie-wander]
+    state = "chasing" [zombie-chase]
+    state = "following-horde" [zombie-follow-horde]
+    state = "feeding" [zombie-feed]
+    state = "breaking-in" [zombie-break-shelter]
+  )
+
+  ; Check for horde opportunities while wandering or chasing
+  if state = "wandering" or state = "chasing" [
+    check-for-horde-behavior
+  ]
+end
+
+to handle-zombie-decay
+  set age-ticks age-ticks + 1
+
+  ; Begin decay after 3 years (~365 * 24 * 3 ticks)
+  if age-ticks > 26280 [
+    let decay-damage decay-rate * (age-ticks / 1000)
+    set health health - decay-damage
+
+    ; Visual decay indication
+    set color scale-color red health 0 100
+
+    ; Reduce abilities when weak
+    if health < 30 [
+      set speed speed * 0.8
+      set strength strength * 0.9
+      set vision-range max (list (vision-range - 0.1) 1)
+    ]
+  ]
+
+  ; Mark for death from old age
+  if age-ticks >= max-lifespan [
+    set health 0
+  ]
+end
+
+to zombie-wander
+  let nearby-humans humans in-radius vision-range
+  let heard-humans humans in-radius hearing-range
+
+  ; Start chasing if human detected
+  if any? nearby-humans or any? heard-humans [
+    let all-detected-humans (turtle-set nearby-humans heard-humans)
+    set target-human min-one-of all-detected-humans [distance myself]
+    set state "chasing"
+    set chase-timer 60  ; Give up after 100 ticks if can't catch
+    set horde-leader? true  ; First to spot becomes leader
+    stop
+  ]
+
+    ; Random wandering
+      rt random 60 - random 30
+      fd speed * 0.5
+
+
+  ; Reduce satiation over time
+  set satiation max (list (satiation - 0.1) 0)
+end
+
+to zombie-chase
+  if target-human = nobody or [state] of target-human = "corpse" [
+    reset-chase
+    stop
+  ]
+
+  ; Give up if too far or timed out
+  if chase-timer <= 0 or distance target-human > (vision-range * 3) [
+    reset-chase
+    stop
+  ]
+
+  ; Handle shelter detection
+  if [state] of target-human = "hiding" and [[is-shelter] of patch-here] of target-human [
+    let shelter-patch [patch-here] of target-human
+    if [shelter-integrity] of shelter-patch > 0 [
+      set state "breaking-in"
+      set target-shelter shelter-patch
+      set break-progress 0
+      stop
+    ]
+  ]
+
+  face target-human
+  fd speed
+
+  ; Check for attack opportunity, check if human is attackable in distance
+  if distance target-human < 1 [
+    let in-shelter? false
+    if [state] of target-human = "hiding" and [[is-shelter] of patch-here] of target-human [
+      set in-shelter? ([shelter-integrity] of patch-here) > 0
+    ]
+    if not in-shelter? [
+      attack-human target-human
+    ]
+  ]
+
+  ; Leave scent trail for horde
+  ask patch-here [ set zombie-scent zombie-scent + 5 ]
+end
+
+to zombie-follow-horde
+  if following-zombie = nobody or [state] of following-zombie != "chasing" [
+    set state "wandering"
+    set following-zombie nobody
+    set target-human nobody
+    ; reset-chase
+    stop
+  ]
+
+  ; Follow the leader zombie
+  face following-zombie
+  fd speed * 0.9  ; Slightly slower than leader
+
+  ; If close enough to leader's target, switch to chasing same target
+  if [target-human] of following-zombie != nobody [
+    set target-human [target-human] of following-zombie
+    if distance target-human < vision-range [
+      set state "chasing"
+      set following-zombie nobody
+      set chase-timer 60  ; Shorter timer for followers
+    ]
+  ]
+end
+
+to check-for-horde-behavior
+  ; Only join horde if not already leading one
+  if not horde-leader? and state != "following-horde" [
+    ; Look for other zombies chasing humans
+    let chasing-zombies other zombies in-radius (hearing-range * 1.5) with [
+      state = "chasing" and target-human != nobody
+    ]
+
+    if any? chasing-zombies [
+      ; Join the nearest chasing zombie's horde
+      let leader min-one-of chasing-zombies [distance myself]
+
+      ; Only join if the target is reasonably close
+      if distance [target-human] of leader < (hearing-range * 2) [
+        set following-zombie leader
+        set target-human [target-human] of leader
+        set state "following-horde"
+        set chase-timer 60  ; Shorter commitment for followers
+
+        set color scale-color red 50 0 100  ; Darker red for horde followers
+      ]
+    ]
+  ]
+end
+
+to attack-human [target]
+  if target != nobody [
+    ask target [
+      ; Apply damage and stress
+      set energy energy - [strength] of myself
+      set stress-level min (list (stress-level + 20) 100)
+
+      ; Infect if not already infected (50% chance)
+      if state != "infected" and random 100 < 50 [
+        set state "infected"
+        set infection-timer 50 + random 50
+        set color violet
+      ]
+
+      ; Handle death
+      if energy <= 0 [
+        ifelse state = "infected" [
+          transform-to-zombie
+        ] [
+          set state "corpse"
+          set color gray
+;          set total-deaths total-deaths + 1
+;          set total-survivors total-survivors - 1
+        ]
+      ]
+    ]
+
+    ; Update zombie state after attack
+    set state "feeding"
+  ]
+end
+
+to zombie-break-shelter
+  ; Abort if no valid shelter
+  if target-shelter = nobody or not [is-shelter] of target-shelter [
+    reset-breaking
+    stop
+  ]
+
+  ; Move closer if not at shelter
+  if patch-here != target-shelter [
+    face target-shelter
+    fd speed * 0.5
+    stop
+  ]
+
+  ; Mark shelter as under attack
+  ask target-shelter [
+    set being-broken? true
+    set break-timer break-timer + 1
+    set pcolor scale-color red break-timer 0 max-break-time
+  ]
+
+  ; Track zombie’s own breaking progress
+  set break-progress break-progress + 1
+  let max-time [max-break-time] of target-shelter
+
+  ; If shelter broken
+  if break-progress >= max-time [
+    ask target-shelter [
+      set shelter-integrity 0
+      set being-broken? false
+      set pcolor gray
+    ]
+
+    ; Attack anyone inside
+    let humans-inside humans-on target-shelter
+    if any? humans-inside [
+      set target-human one-of humans-inside
+      attack-human target-human
+    ]
+
+    reset-breaking
+    stop
+  ]
+
+  ; Give up if taking too long
+  if break-progress > (max-time + 50) [
+    ask target-shelter [
+      set being-broken? false
+      set break-timer 0
+      set pcolor brown
+    ]
+    reset-breaking
+  ]
+end
+
+to transform-to-zombie
+  let current-patch patch-here
+
+  ; Create new zombie at same location
+  hatch-zombies 1 [
+    set shape "person"
+    set color red
+    set size 1.5
+
+    move-to current-patch
+
+    set health 75 + random 25
+    set speed 0.2 + random-float 0.8
+    set strength 7 + random 3
+    set state "wandering"
+    set vision-range 2 + random 3
+    set hearing-range 3 + random 2
+    set satiation 0
+
+
+    ; Initialize horde behavior properties
+    set target-human nobody
+    set horde-leader? false
+    set following-zombie nobody
+    set chase-timer 0
+
+    set age-ticks 0
+    set decay-rate 0.01 + random-float 0.04
+    set max-lifespan 1000 + random 3000
+
+    set target-shelter nobody
+    set break-progress 0
+  ]
+
+  ; Update global counters
+  ; set total-infections total-infections + 1
+  ; set total-survivors total-survivors - 1
+
+  ; Remove original human
+  die
+end
+
+; ------- HELPER FUNCTIONS ------------
+
+to zombie-feed
+  set satiation min (list (satiation + 5) 100)
+  reset-chase
+end
+
+to reset-chase
+  set state "wandering"
+  set target-human nobody
+  set horde-leader? false
+  set chase-timer 0
+end
+
+to reset-breaking
+  set state "wandering"
+  set target-shelter nobody
+  set break-progress 0
+end
+>>>>>>> 0ac34e2e525063d1b5feb6f55edfce54a3c32faa
 
   ; Begin decay after 3 years (~365 * 24 * 3 ticks)
   if age-ticks > 26280 [
@@ -933,10 +1254,17 @@ to reset-breaking
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
+<<<<<<< HEAD
 262
 23
 933
 565
+=======
+322
+13
+993
+555
+>>>>>>> 0ac34e2e525063d1b5feb6f55edfce54a3c32faa
 -1
 -1
 13.0
@@ -960,10 +1288,10 @@ ticks
 30.0
 
 BUTTON
-23
-35
-90
-68
+77
+111
+144
+144
 setup
 setup
 NIL
@@ -977,25 +1305,43 @@ NIL
 1
 
 SLIDER
+<<<<<<< HEAD
 0
 166
 210
 199
+=======
+53
+161
+263
+194
+>>>>>>> 0ac34e2e525063d1b5feb6f55edfce54a3c32faa
 initial-human-population
 initial-human-population
 0
 100
+<<<<<<< HEAD
 22.0
+=======
+21.0
+>>>>>>> 0ac34e2e525063d1b5feb6f55edfce54a3c32faa
 1
 1
 NIL
 HORIZONTAL
 
 SLIDER
+<<<<<<< HEAD
 0
 211
 212
 244
+=======
+52
+200
+264
+233
+>>>>>>> 0ac34e2e525063d1b5feb6f55edfce54a3c32faa
 initial-zombie-population
 initial-zombie-population
 0
@@ -1007,10 +1353,10 @@ NIL
 HORIZONTAL
 
 BUTTON
-68
-99
-132
-133
+151
+111
+215
+145
 NIL
 go
 T
@@ -1024,11 +1370,19 @@ NIL
 1
 
 PLOT
+<<<<<<< HEAD
 981
 28
 1181
 178
 Group Conflicts
+=======
+1015
+21
+1224
+182
+Population Over Time
+>>>>>>> 0ac34e2e525063d1b5feb6f55edfce54a3c32faa
 NIL
 NIL
 0.0
@@ -1039,6 +1393,7 @@ true
 false
 "" ""
 PENS
+<<<<<<< HEAD
 "default" 1.0 0 -16777216 true "" "plot conflict"
 
 PLOT
@@ -1076,6 +1431,20 @@ false
 "" ""
 PENS
 "default" 1.0 0 -16777216 true "" "plot resource-efficiency"
+=======
+"zombies" 1.0 0 -2674135 true "" "plot count zombies"
+"humans" 1.0 0 -7500403 true "" "plot count humans"
+
+TEXTBOX
+1017
+190
+1167
+218
+Red Line - Zombies\nBlack Line - Humans
+11
+0.0
+1
+>>>>>>> 0ac34e2e525063d1b5feb6f55edfce54a3c32faa
 
 @#$#@#$#@
 ## WHAT IS IT?
