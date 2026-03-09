@@ -4,3 +4,6 @@ Coursework for CMSC178: Agent-Based Modeling from the University of the Philippi
 ## Abstract
 Traditional epidemiological models of zombie outbreaks often overlook the complexities of human social behavior, particularly how group dynamics influence survival outcomes. This study presents an
 agent-based simulation, Pandemic Z, which explores how varying group sizes affect survival in a resource-limited zombie apocalypse. Drawing from Realistic Conflict Theory, Social Identity Theory, and principles of Self-Organization, the model incorporates stress, trust, resource competition, and emergent cooperation among agents. Results suggest that group size significantly affects the outcomes of survival in a zombie-infested environment. Future research may delve deeper into enhancing realism where they can add more specialized human roles, environmental factors, and a deeper psychological system.
+
+## Presentation 
+You can access the fun summary of the model's performance alongside its evaluation [here](https://drive.google.com/file/d/1BqjSR39E4MMkSZlpt6Ja3uREjAY4T5KZ/view?usp=sharing). Or you can read the long (and maybe boring if its not your preferred form of written media) [here](https://github.com/omoraisu/Pandemic-Z/blob/main/Pandemic_Z_Paper_Submission.pdf). Enjoy 𐔌՞ ܸ.ˬ.ܸ՞𐦯
